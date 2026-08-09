@@ -112,10 +112,10 @@ async function fillPhotos() {
 
 /**
  * Reduz a foto antes de a guardar. Uma foto de telemóvel tem 3-6 MB;
- * fica em 300-600 KB sem perder legibilidade. Mantenho 2000px de lado
- * maior porque o OCR precisa de ver bem as letras.
+ * fica em 200-400 KB. 1600px no lado maior chega para ler o texto da
+ * página ao ampliar, sem encher o telemóvel de imagens enormes.
  */
-function compressImage(file, maxSide = 2000, quality = 0.8) {
+function compressImage(file, maxSide = 1600, quality = 0.8) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -519,8 +519,8 @@ function renderBook(book) {
 
 /* ---------------- Ecrã: Nova nota ---------------- */
 
-// Guardado fora do render para não se perder enquanto o OCR corre
-let draft = { blob: null, url: null, type: "quote", keepPhoto: true };
+// Guardado fora do render para a foto não se perder ao redesenhar o ecrã
+let draft = { blob: null, url: null, type: "quote" };
 
 function renderEditor(book) {
   app().innerHTML = `
@@ -534,11 +534,10 @@ function renderEditor(book) {
       </div>
 
       <div id="photoArea"></div>
-      <p class="rt-hint" id="ocrStatus" hidden></p>
 
-      <label class="rt-label" for="noteText">Texto</label>
-      <textarea class="rt-input rt-textarea" id="noteText" rows="8"
-        placeholder="A passagem do livro — ou fotografa a página acima"></textarea>
+      <label class="rt-label" for="noteText">Texto (opcional se tiveres foto)</label>
+      <textarea class="rt-input rt-textarea" id="noteText" rows="6"
+        placeholder="A passagem do livro"></textarea>
 
       <label class="rt-label" for="notePage">Página (opcional)</label>
       <input class="rt-input" id="notePage" type="number" inputmode="numeric">
@@ -559,9 +558,7 @@ function renderEditor(book) {
         x.classList.toggle("rt-toggle-on", x.dataset.type === draft.type)
       );
       $("#noteText").placeholder =
-        draft.type === "quote"
-          ? "A passagem do livro — ou fotografa a página acima"
-          : "O que pensaste sobre isto?";
+        draft.type === "quote" ? "A passagem do livro" : "O que pensaste sobre isto?";
     };
   });
   $("#camInput").onchange = (e) => pickPhoto(e.target);
@@ -586,24 +583,19 @@ function renderPhotoArea() {
     <div class="rt-panel">
       <img class="rt-photo rt-photo-big" src="${draft.url}" alt="Página fotografada">
       <div class="rt-row rt-row-wrap">
-        <button class="rt-btn" id="redoOcr">Extrair texto outra vez</button>
         <button class="rt-btn" id="useCam2">Repetir foto</button>
+        <button class="rt-btn" id="useGal2">Outra imagem</button>
         <button class="rt-btn" id="dropPhoto">Remover</button>
       </div>
-      <label class="rt-check">
-        <input type="checkbox" id="keepPhoto" ${draft.keepPhoto ? "checked" : ""}>
-        <span>Guardar a foto com a nota</span>
-      </label>
     </div>`;
-  $("#redoOcr").onclick = () => runOcr();
   $("#useCam2").onclick = () => $("#camInput").click();
+  $("#useGal2").onclick = () => $("#galInput").click();
   $("#dropPhoto").onclick = () => { clearDraft(); renderPhotoArea(); };
-  $("#keepPhoto").onchange = (e) => { draft.keepPhoto = e.target.checked; };
 }
 
 function clearDraft() {
   if (draft.url) URL.revokeObjectURL(draft.url);
-  draft = { blob: null, url: null, type: draft.type, keepPhoto: true };
+  draft = { blob: null, url: null, type: draft.type };
 }
 
 async function pickPhoto(input) {
@@ -615,29 +607,9 @@ async function pickPhoto(input) {
     if (draft.url) URL.revokeObjectURL(draft.url);
     draft.blob = blob;
     draft.url = URL.createObjectURL(blob);
-    draft.keepPhoto = true;
     renderPhotoArea();
-    runOcr();
   } catch (err) {
     notify(err.message);
-  }
-}
-
-async function runOcr() {
-  if (!draft.blob) return;
-  const status = $("#ocrStatus");
-  status.hidden = false;
-  status.textContent = "A preparar o motor de leitura…";
-  try {
-    const text = await OCR.extract(draft.blob, (msg, progress) => {
-      const pct = progress ? ` ${Math.round(progress * 100)}%` : "";
-      status.textContent = msg + pct;
-    });
-    const box = $("#noteText");
-    box.value = box.value.trim() ? box.value.trim() + "\n\n" + text : text;
-    status.textContent = "Texto extraído. Confere e corrige o que for preciso.";
-  } catch (err) {
-    status.textContent = err.message + " Podes escrever o texto à mão.";
   }
 }
 
@@ -647,7 +619,7 @@ async function saveNote(book) {
   if (!text && !draft.blob) { notify("A nota está vazia"); return; }
 
   const id = uid();
-  const keep = !!(draft.blob && draft.keepPhoto);
+  const keep = !!draft.blob;
   if (keep) await DB.putPhoto(id, draft.blob);
 
   await DB.putNote({

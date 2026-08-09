@@ -9,7 +9,6 @@ Funciona no browser, instala-se no telemóvel e guarda tudo no próprio disposit
 index.html        a página e a barra de navegação
 css/style.css     o aspeto
 js/db.js          base de dados (IndexedDB)
-js/ocr.js         extração de texto das fotos (Tesseract)
 js/app.js         os ecrãs e a lógica
 manifest.json     nome, ícone e cores da app instalada
 sw.js             faz a app funcionar sem rede
@@ -59,11 +58,6 @@ Vai a github.com e cria uma conta gratuita, se ainda não tiveres.
 - Se mudares `index.html`, `css` ou `js`, **aumenta o número em `CACHE_NAME`**
   dentro do `sw.js` (por exemplo `caderno-leitura-v2`). Sem isso o telemóvel
   continua a mostrar a versão antiga.
-
-## Primeira utilização do OCR
-
-Na primeira foto, o Tesseract descarrega cerca de 10 MB com os dados do
-português. Demora e precisa de rede. A partir daí funciona offline.
 
 ## Cópias de segurança
 

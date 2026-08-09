@@ -10,14 +10,13 @@
    a versão antiga.
    ================================================================== */
 
-const CACHE_NAME = "caderno-leitura-v1";
+const CACHE_NAME = "caderno-leitura-v2";
 
 const APP_FILES = [
   "./",
   "index.html",
   "css/style.css",
   "js/db.js",
-  "js/ocr.js",
   "js/app.js",
   "manifest.json",
   "icons/icon-192.png",
@@ -51,8 +50,8 @@ self.addEventListener("fetch", (event) => {
   // A pesquisa de livros precisa sempre de dados frescos: nunca da cache
   if (url.hostname === "openlibrary.org") return;
 
-  // O motor de OCR e as capas vêm de fora: guarda-os assim que chegarem,
-  // para funcionarem offline na próxima vez
+  // As capas dos livros vêm de fora: guarda-as assim que chegarem,
+  // para aparecerem offline na próxima vez
   const isExternal = url.origin !== self.location.origin;
 
   event.respondWith(
