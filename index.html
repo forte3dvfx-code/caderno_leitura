@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Caderno de Leitura</title>
+  <meta name="description" content="As minhas leituras e anotações, guardadas só neste dispositivo.">
+  <meta name="theme-color" content="#171C2E">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- Todo o conteúdo é desenhado por JavaScript dentro desta div -->
+  <div id="app"></div>
+
+  <nav class="rt-tabs" id="tabs">
+    <button class="rt-tab" data-view="library">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6a2 2 0 0 1 2 2v14a2 2 0 0 0-2-2H4z"/><path d="M20 4h-6a2 2 0 0 0-2 2v14a2 2 0 0 1 2-2h6z"/></svg>
+      <span>Estante</span>
+    </button>
+    <button class="rt-tab" data-view="notes">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h11l5 5v13H4z"/><path d="M8 12h8M8 16h5"/></svg>
+      <span>Notas</span>
+    </button>
+    <button class="rt-tab" data-view="add">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+      <span>Adicionar</span>
+    </button>
+    <button class="rt-tab" data-view="settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>
+      <span>Dados</span>
+    </button>
+  </nav>
+
+  <!-- Foto em grande, ao tocar numa imagem -->
+  <div class="rt-lightbox" id="lightbox" hidden>
+    <button class="rt-lightbox-close" id="lightboxClose" aria-label="Fechar">&times;</button>
+    <img id="lightboxImg" alt="Foto da página">
+  </div>
+
+  <div class="rt-toast" id="toast" hidden></div>
+
+  <!-- Tesseract: o motor de OCR. Vem de um CDN gratuito.
+       Na primeira utilização descarrega os dados do português;
+       depois disso fica guardado e funciona sem rede. -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+  <script src="js/db.js"></script>
+  <script src="js/ocr.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
