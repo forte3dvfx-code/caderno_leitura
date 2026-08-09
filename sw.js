@@ -10,7 +10,7 @@
    a versão antiga.
    ================================================================== */
 
-const CACHE_NAME = "caderno-leitura-v2";
+const CACHE_NAME = "caderno-leitura-v5";
 
 const APP_FILES = [
   "./",

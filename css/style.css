@@ -167,6 +167,38 @@ body {
 }
 .rt-toggle .rt-toggle-on { background: var(--ink); color: #fff; border-color: var(--ink); }
 
+/* Etiqueta do tipo de nota */
+.rt-badge {
+  display: inline-block; font-size: 10px; letter-spacing: 0.06em;
+  text-transform: uppercase; font-weight: 600; padding: 2px 7px;
+  border-radius: 999px; margin-bottom: 8px;
+}
+.rt-badge-quote { background: var(--marker); color: var(--ink); }
+.rt-badge-summary { background: var(--ink); color: #fff; }
+.rt-badge-thought { background: var(--paper); color: var(--muted); border: 1px solid var(--line); }
+
+/* Estrelas de avaliação */
+.rt-stars {
+  position: relative; display: inline-block; margin: 8px 0 2px;
+  font-size: 20px; line-height: 1; letter-spacing: 2px;
+  font-family: system-ui, sans-serif;
+}
+.rt-stars-bg { color: var(--line); }
+.rt-stars-fill {
+  position: absolute; top: 0; left: 0; overflow: hidden;
+  white-space: nowrap; color: #E0A419;
+}
+.rt-star-hit {
+  position: absolute; top: -6px; width: 20%; height: calc(100% + 12px);
+  background: none; border: none; padding: 0; cursor: pointer;
+}
+.rt-star-hit[data-star="1"] { left: 0; }
+.rt-star-hit[data-star="2"] { left: 20%; }
+.rt-star-hit[data-star="3"] { left: 40%; }
+.rt-star-hit[data-star="4"] { left: 60%; }
+.rt-star-hit[data-star="5"] { left: 80%; }
+.rt-card .rt-stars { font-size: 14px; margin: 6px 0 0; pointer-events: none; }
+
 .rt-notes { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
 .rt-note {
   display: flex; justify-content: space-between; gap: 8px; align-items: flex-start;
@@ -206,6 +238,23 @@ body {
   width: 100%; margin-top: 20px; background: none; border: 1px solid var(--line);
   color: var(--danger); border-radius: 8px; padding: 10px; font: inherit; font-size: 13px; cursor: pointer;
 }
+
+/* Janela de aviso */
+.rt-modal {
+  position: fixed; inset: 0; z-index: 60; display: flex;
+  align-items: center; justify-content: center; padding: 20px;
+  background: rgba(10, 12, 22, 0.55);
+}
+.rt-modal-box {
+  background: var(--surface); border-radius: 14px; padding: 22px 20px 16px;
+  max-width: 380px; width: 100%; box-shadow: 0 12px 40px rgba(10, 12, 22, 0.25);
+}
+.rt-modal-title {
+  font-family: Georgia, serif; font-size: 19px; margin: 0 0 8px; font-weight: 600;
+}
+.rt-modal-text { font-size: 14px; line-height: 1.55; color: var(--muted); margin: 0 0 4px; }
+.rt-modal-text strong { color: var(--ink); }
+.rt-modal-box .rt-link { display: block; width: 100%; text-align: center; padding: 12px 0 4px; }
 
 /* Barra de navegação */
 .rt-tabs {

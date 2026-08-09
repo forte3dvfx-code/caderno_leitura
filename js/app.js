@@ -17,6 +17,8 @@ const state = {
   filter: "reading",   // filtro da estante
   noteType: "all",     // filtro do caderno
   query: "",           // pesquisa no caderno
+  bookNoteOrder: "asc",  // dentro de um livro: pela ordem em que foram escritas
+  allNoteOrder: "desc",  // no caderno geral: as mais recentes primeiro
   openBookId: null,    // livro aberto
   editorBookId: null,  // a escrever nota para este livro
   searchResults: [],
@@ -34,6 +36,19 @@ const STATUS = {
   finished: "Lido",
   abandoned: "Abandonado",
 };
+
+// Os três tipos de nota, com os mesmos nomes do Bookmory.
+// "note" é o tipo antigo, de antes desta separação: tratamo-lo como
+// pensamento para não haver notas órfãs.
+const NOTE_TYPES = {
+  quote: "Citação",
+  summary: "Resumo",
+  thought: "Pensamento",
+};
+
+function noteType(note) {
+  return NOTE_TYPES[note.type] ? note.type : "thought";
+}
 
 /* ---------------- Utilitários ---------------- */
 
@@ -62,6 +77,40 @@ function formatDate(iso) {
   });
 }
 
+// As notas mostram data e hora, como no Bookmory: numa sessão de leitura
+// escrevem-se várias no mesmo dia e a hora é o que as distingue.
+function formatDateTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return (
+    d.toLocaleDateString("pt-PT", { day: "2-digit", month: "short", year: "numeric" }) +
+    ", " +
+    d.toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit" })
+  );
+}
+
+/**
+ * Estrelas de avaliação. Desenha cinco estrelas vazias e por cima uma
+ * camada cheia cortada à largura certa — assim meias estrelas (3,5)
+ * aparecem corretamente, o que é preciso para os dados do Bookmory.
+ * Com `interactive`, cada estrela é clicável.
+ */
+function starsHtml(rating, interactive) {
+  const value = Number(rating) || 0;
+  const pct = Math.max(0, Math.min(5, value)) / 5 * 100;
+  const hits = interactive
+    ? [1, 2, 3, 4, 5]
+        .map((i) => `<button class="rt-star-hit" data-star="${i}"
+          aria-label="${i} ${i === 1 ? "estrela" : "estrelas"}"></button>`)
+        .join("")
+    : "";
+  return `<div class="rt-stars ${interactive ? "rt-stars-live" : ""}">
+    <div class="rt-stars-bg">★★★★★</div>
+    <div class="rt-stars-fill" style="width:${pct}%">★★★★★</div>
+    ${hits}
+  </div>`;
+}
+
 function initials(title) {
   return String(title)
     .split(" ")
@@ -78,6 +127,52 @@ function notify(msg) {
   el.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (el.hidden = true), 2600);
+}
+
+/* ---------------- Preferências ---------------- */
+
+/*
+ * As preferências ficam em localStorage e não no IndexedDB: são quatro
+ * valores simples e não vale a pena a complicação de mais um armazém.
+ * A contagem é por datas reais — se estiveres três semanas sem abrir a
+ * app, à primeira abertura ela diz-te que já vais em 21 dias.
+ */
+
+const PREFS_KEY = "caderno-prefs";
+const DEFAULT_PREFS = {
+  backupDays: 14,     // 0 = nunca avisar
+  lastBackupAt: null, // data da última exportação
+  firstRunAt: null,   // referência para quem ainda nunca exportou
+  snoozeUntil: null,  // adiado até esta data
+};
+
+function loadPrefs() {
+  try {
+    return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") };
+  } catch (e) {
+    return { ...DEFAULT_PREFS };
+  }
+}
+
+let prefs = loadPrefs();
+
+function savePrefs() {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+  } catch (e) {
+    console.warn("Não consegui guardar as preferências", e);
+  }
+}
+
+function daysSince(iso) {
+  if (!iso) return null;
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+}
+
+function markBackupDone() {
+  prefs.lastBackupAt = new Date().toISOString();
+  prefs.snoozeUntil = null;
+  savePrefs();
 }
 
 /* ---------------- Fotos ---------------- */
@@ -216,6 +311,7 @@ function renderLibrary() {
             <div class="rt-card-body">
               <h2 class="rt-book-title">${esc(b.title)}</h2>
               <p class="rt-book-author">${esc(b.author)}</p>
+              ${Number(b.rating) ? starsHtml(b.rating, false) : ""}
               <p class="rt-note-count">${n === 0 ? "sem notas" : n + (n === 1 ? " nota" : " notas")}</p>
             </div>
           </button></li>`;
@@ -247,9 +343,29 @@ function renderLibrary() {
 /* ---------------- Ecrã: Caderno (todas as notas) ---------------- */
 
 function noteBodyHtml(note) {
-  return note.type === "quote"
-    ? `<p class="rt-quote"><span class="rt-marker">${esc(note.text)}</span></p>`
-    : `<p class="rt-note-text">${esc(note.text)}</p>`;
+  const t = noteType(note);
+  const badge = `<span class="rt-badge rt-badge-${t}">${NOTE_TYPES[t]}</span>`;
+  const body =
+    t === "quote"
+      ? `<p class="rt-quote"><span class="rt-marker">${esc(note.text)}</span></p>`
+      : `<p class="rt-note-text">${esc(note.text)}</p>`;
+  return badge + body;
+}
+
+// Ordena as notas por data de criação, no sentido pedido.
+// "asc" = pela ordem em que foram escritas, que é como se lê um diário
+// de leitura. "desc" = as mais recentes no topo.
+function sortNotes(list, order) {
+  const sorted = list
+    .slice()
+    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  return order === "desc" ? sorted.reverse() : sorted;
+}
+
+function orderChipHtml(order, attr) {
+  const label = order === "asc" ? "Mais antigas primeiro" : "Mais recentes primeiro";
+  return `<div class="rt-filters rt-filters-tight">
+    <button class="rt-chip" ${attr}>${label}</button></div>`;
 }
 
 function photoHtml(note) {
@@ -264,19 +380,20 @@ function renderNotes() {
     return b ? b.title : "Livro removido";
   };
   const term = state.query.trim().toLowerCase();
-  const shown = notes
-    .filter((n) => (state.noteType === "all" ? true : n.type === state.noteType))
+  const filtered = notes
+    .filter((n) => (state.noteType === "all" ? true : noteType(n) === state.noteType))
     .filter((n) =>
       !term
         ? true
         : n.text.toLowerCase().includes(term) || titleOf(n.bookId).toLowerCase().includes(term)
-    )
-    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    );
+  const shown = sortNotes(filtered, state.allNoteOrder);
 
-  const chips = [["all", "Tudo"], ["quote", "Citações"], ["note", "Notas"]]
-    .map(([k, label]) =>
-      `<button class="rt-chip ${state.noteType === k ? "rt-chip-on" : ""}" data-ntype="${k}">${label}</button>`
-    )
+  const chips = [["all", "Tudo"], ["quote", "Citações"], ["summary", "Resumos"], ["thought", "Pensamentos"]]
+    .map(([k, label]) => {
+      const n = k === "all" ? notes.length : notes.filter((x) => noteType(x) === k).length;
+      return `<button class="rt-chip ${state.noteType === k ? "rt-chip-on" : ""}" data-ntype="${k}">${label}${n ? ` <em>${n}</em>` : ""}</button>`;
+    })
     .join("");
 
   const list = shown.length
@@ -286,7 +403,7 @@ function renderNotes() {
             <button class="rt-note-book" data-book="${n.bookId}">${esc(titleOf(n.bookId))}</button>
             ${noteBodyHtml(n)}
             ${photoHtml(n)}
-            <span class="rt-meta">${n.page ? "pág. " + n.page + " · " : ""}${formatDate(n.createdAt)}</span>
+            <span class="rt-meta">${n.page ? "pág. " + n.page + " · " : ""}${formatDateTime(n.createdAt)}</span>
           </div></li>`
         )
         .join("")}</ul>`
@@ -300,6 +417,7 @@ function renderNotes() {
       </header>
       <input class="rt-input" id="noteSearch" placeholder="Procurar nas notas…" value="${esc(state.query)}">
       <div class="rt-filters rt-filters-tight">${chips}</div>
+      ${orderChipHtml(state.allNoteOrder, 'data-allorder')}
       ${list}
     </main>`;
 
@@ -315,6 +433,11 @@ function renderNotes() {
   app().querySelectorAll("[data-ntype]").forEach((el) => {
     el.onclick = () => { state.noteType = el.dataset.ntype; render(); };
   });
+  const allOrder = app().querySelector("[data-allorder]");
+  if (allOrder) allOrder.onclick = () => {
+    state.allNoteOrder = state.allNoteOrder === "asc" ? "desc" : "asc";
+    render();
+  };
   app().querySelectorAll("[data-book]").forEach((el) => {
     el.onclick = () => { state.openBookId = el.dataset.book; render(); };
   });
@@ -448,9 +571,10 @@ async function addBook(found, status) {
 /* ---------------- Ecrã: Livro ---------------- */
 
 function renderBook(book) {
-  const mine = notes
-    .filter((n) => n.bookId === book.id)
-    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  const mine = sortNotes(
+    notes.filter((n) => n.bookId === book.id),
+    state.bookNoteOrder
+  );
 
   const options = Object.entries(STATUS)
     .map(([k, v]) => `<option value="${k}" ${book.status === k ? "selected" : ""}>${v}</option>`)
@@ -462,7 +586,7 @@ function renderBook(book) {
           (n) => `<li class="rt-note"><div class="rt-note-main">
             ${noteBodyHtml(n)}
             ${photoHtml(n)}
-            <span class="rt-meta">${n.page ? "pág. " + n.page + " · " : ""}${formatDate(n.createdAt)}</span>
+            <span class="rt-meta">${n.page ? "pág. " + n.page + " · " : ""}${formatDateTime(n.createdAt)}</span>
           </div>
           <button class="rt-icon-btn rt-icon-btn-quiet" data-delnote="${n.id}" aria-label="Apagar nota">&times;</button>
           </li>`
@@ -479,17 +603,24 @@ function renderBook(book) {
           <h1 class="rt-detail-title">${esc(book.title)}</h1>
           <p class="rt-book-author">${esc(book.author)}</p>
           <select class="rt-select" id="statusSel">${options}</select>
+          ${starsHtml(book.rating, true)}
           ${book.finishedAt ? `<p class="rt-meta rt-meta-block">Terminado a ${formatDate(book.finishedAt)}</p>` : ""}
         </div>
       </div>
       <button class="rt-btn rt-btn-primary rt-btn-full" id="newNote">Nova nota</button>
       <h2 class="rt-section-title">${mine.length} ${mine.length === 1 ? "nota" : "notas"}</h2>
+      ${mine.length > 1 ? orderChipHtml(state.bookNoteOrder, "data-bookorder") : ""}
       ${list}
       <button class="rt-danger" id="delBook">Remover livro e as suas notas</button>
     </main>`;
 
   $("#back").onclick = () => { state.openBookId = null; render(); };
   $("#newNote").onclick = () => { state.editorBookId = book.id; render(); };
+  const bookOrder = app().querySelector("[data-bookorder]");
+  if (bookOrder) bookOrder.onclick = () => {
+    state.bookNoteOrder = state.bookNoteOrder === "asc" ? "desc" : "asc";
+    render();
+  };
   $("#statusSel").onchange = async (e) => {
     const status = e.target.value;
     const patch = { ...book, status, updatedAt: new Date().toISOString() };
@@ -498,6 +629,15 @@ function renderBook(book) {
     await DB.putBook(patch);
     await refresh();
   };
+  // Estrelas: tocar numa põe essa avaliação; tocar na atual limpa-a
+  app().querySelectorAll("[data-star]").forEach((el) => {
+    el.onclick = async () => {
+      const value = Number(el.dataset.star);
+      const rating = Number(book.rating) === value ? 0 : value;
+      await DB.putBook({ ...book, rating, updatedAt: new Date().toISOString() });
+      await refresh();
+    };
+  });
   app().querySelectorAll("[data-delnote]").forEach((el) => {
     el.onclick = async () => {
       const id = el.dataset.delnote;
@@ -522,6 +662,12 @@ function renderBook(book) {
 // Guardado fora do render para a foto não se perder ao redesenhar o ecrã
 let draft = { blob: null, url: null, type: "quote" };
 
+const PLACEHOLDERS = {
+  quote: "A passagem, tal como está no livro",
+  summary: "O que este capítulo diz, por tuas palavras",
+  thought: "O que pensaste sobre isto?",
+};
+
 function renderEditor(book) {
   app().innerHTML = `
     <main class="rt-main rt-detail">
@@ -529,15 +675,18 @@ function renderEditor(book) {
       <h1 class="rt-detail-title rt-mb">Nova nota</h1>
 
       <div class="rt-toggle">
-        <button data-type="quote" class="${draft.type === "quote" ? "rt-toggle-on" : ""}">Citação</button>
-        <button data-type="note" class="${draft.type === "note" ? "rt-toggle-on" : ""}">Nota minha</button>
+        ${Object.entries(NOTE_TYPES)
+          .map(([k, label]) =>
+            `<button data-type="${k}" class="${draft.type === k ? "rt-toggle-on" : ""}">${label}</button>`
+          )
+          .join("")}
       </div>
 
       <div id="photoArea"></div>
 
       <label class="rt-label" for="noteText">Texto (opcional se tiveres foto)</label>
       <textarea class="rt-input rt-textarea" id="noteText" rows="6"
-        placeholder="A passagem do livro"></textarea>
+        placeholder="${esc(PLACEHOLDERS[draft.type])}"></textarea>
 
       <label class="rt-label" for="notePage">Página (opcional)</label>
       <input class="rt-input" id="notePage" type="number" inputmode="numeric">
@@ -557,8 +706,7 @@ function renderEditor(book) {
       app().querySelectorAll("[data-type]").forEach((x) =>
         x.classList.toggle("rt-toggle-on", x.dataset.type === draft.type)
       );
-      $("#noteText").placeholder =
-        draft.type === "quote" ? "A passagem do livro" : "O que pensaste sobre isto?";
+      $("#noteText").placeholder = PLACEHOLDERS[draft.type];
     };
   });
   $("#camInput").onchange = (e) => pickPhoto(e.target);
@@ -639,6 +787,69 @@ async function saveNote(book) {
   await refresh();
 }
 
+/* ---------------- Aviso de cópia de segurança ---------------- */
+
+/**
+ * Mostra o aviso se já passaram os dias escolhidos desde a última
+ * exportação. Corre uma vez por abertura da app.
+ */
+function maybeShowBackupReminder() {
+  if (!prefs.backupDays) return;                 // avisos desligados
+  if (books.length === 0 && notes.length === 0) return;  // nada a perder ainda
+
+  // Quem ainda nunca exportou conta a partir do primeiro dia de uso
+  if (!prefs.firstRunAt) {
+    prefs.firstRunAt = new Date().toISOString();
+    savePrefs();
+  }
+  if (prefs.snoozeUntil && Date.now() < new Date(prefs.snoozeUntil).getTime()) return;
+
+  const days = daysSince(prefs.lastBackupAt || prefs.firstRunAt);
+  if (days === null || days < prefs.backupDays) return;
+
+  showBackupDialog(days, !prefs.lastBackupAt);
+}
+
+function showBackupDialog(days, never) {
+  const wrap = document.createElement("div");
+  wrap.className = "rt-modal";
+  wrap.innerHTML = `
+    <div class="rt-modal-box" role="dialog" aria-modal="true">
+      <h2 class="rt-modal-title">Fazer uma cópia?</h2>
+      <p class="rt-modal-text">
+        ${never
+          ? `Ainda não exportaste nada, e já lá vão ${days} dias.`
+          : `A última cópia foi há <strong>${days} dias</strong>.`}
+        Se limpares os dados do browser, ${books.length} livros e ${notes.length} notas
+        desaparecem sem volta.
+      </p>
+      <button class="rt-btn rt-btn-primary rt-btn-full" id="mExport">Exportar agora</button>
+      <button class="rt-btn rt-btn-full" id="mSnooze">Lembrar amanhã</button>
+      <button class="rt-link" id="mOff">Não voltar a avisar</button>
+    </div>`;
+  document.body.appendChild(wrap);
+
+  const close = () => wrap.remove();
+
+  wrap.querySelector("#mExport").onclick = async () => {
+    downloadJson(await DB.exportData(false), `leituras-${today()}.json`);
+    markBackupDone();
+    close();
+    notify("Cópia exportada");
+  };
+  wrap.querySelector("#mSnooze").onclick = () => {
+    prefs.snoozeUntil = new Date(Date.now() + 86400000).toISOString();
+    savePrefs();
+    close();
+  };
+  wrap.querySelector("#mOff").onclick = () => {
+    prefs.backupDays = 0;
+    savePrefs();
+    close();
+    notify("Avisos desligados. Podes voltar a ligá-los em Dados.");
+  };
+}
+
 /* ---------------- Ecrã: Dados ---------------- */
 
 function renderSettings() {
@@ -661,6 +872,19 @@ function renderSettings() {
         <p class="rt-hint" id="usage"></p>
       </div>
 
+      <h2 class="rt-section-title">Cópias de segurança</h2>
+      <div class="rt-panel">
+        <p class="rt-hint" id="backupState"></p>
+        <label class="rt-label" for="backupDays">Avisar-me quando passarem</label>
+        <select class="rt-select" id="backupDays">
+          <option value="7">7 dias</option>
+          <option value="14">14 dias</option>
+          <option value="30">30 dias</option>
+          <option value="60">60 dias</option>
+          <option value="0">Nunca avisar</option>
+        </select>
+      </div>
+
       <h2 class="rt-section-title">Instalação</h2>
       <div class="rt-panel">
         <p class="rt-hint" id="installHint">A verificar…</p>
@@ -678,12 +902,31 @@ function renderSettings() {
 
   $("#expText").onclick = async () => {
     downloadJson(await DB.exportData(false), `leituras-${today()}.json`);
+    markBackupDone();
+    renderSettings();
     notify("Texto exportado");
   };
   $("#expAll").onclick = async () => {
     notify("A juntar as fotos…");
     downloadJson(await DB.exportData(true), `leituras-completo-${today()}.json`);
+    markBackupDone();
+    renderSettings();
   };
+
+  // Estado das cópias e escolha do intervalo
+  const sel = $("#backupDays");
+  sel.value = String(prefs.backupDays);
+  sel.onchange = () => {
+    prefs.backupDays = Number(sel.value);
+    prefs.snoozeUntil = null;
+    savePrefs();
+    renderSettings();
+    notify(prefs.backupDays ? `Aviso aos ${prefs.backupDays} dias` : "Avisos desligados");
+  };
+  const d = daysSince(prefs.lastBackupAt);
+  $("#backupState").textContent = prefs.lastBackupAt
+    ? `Última cópia: ${formatDate(prefs.lastBackupAt)} (há ${d} ${d === 1 ? "dia" : "dias"}).`
+    : "Ainda não exportaste nenhuma cópia.";
   $("#imp").onclick = () => $("#impInput").click();
   $("#impInput").onchange = (e) => {
     const file = e.target.files && e.target.files[0];
@@ -760,8 +1003,8 @@ function downloadJson(obj, name) {
 function demoData() {
   const daysAgo = (d) => new Date(Date.now() - d * 86400000).toISOString();
   const dayOnly = (d) => daysAgo(d).slice(0, 10);
-  const mk = (title, author, status, age, started, finished) => ({
-    id: uid(), title, author, cover: null, isbn: null, status,
+  const mk = (title, author, status, age, started, finished, rating) => ({
+    id: uid(), title, author, cover: null, isbn: null, status, rating: rating || 0,
     startedAt: started != null ? dayOnly(started) : null,
     finishedAt: finished != null ? dayOnly(finished) : null,
     createdAt: daysAgo(age), updatedAt: daysAgo(age),
@@ -770,9 +1013,9 @@ function demoData() {
   const books = [
     mk("Livro do Desassossego", "Bernardo Soares / Fernando Pessoa", "reading", 2, 40),
     mk("O Deserto dos Tártaros", "Dino Buzzati", "reading", 5, 12),
-    mk("Ensaio sobre a Cegueira", "José Saramago", "finished", 20, 90, 25),
-    mk("Os Maias", "Eça de Queirós", "finished", 60, 200, 70),
-    mk("Sapiens", "Yuval Noah Harari", "finished", 120, 180, 130),
+    mk("Ensaio sobre a Cegueira", "José Saramago", "finished", 20, 90, 25, 5),
+    mk("Os Maias", "Eça de Queirós", "finished", 60, 200, 70, 4),
+    mk("Sapiens", "Yuval Noah Harari", "finished", 120, 180, 130, 3.5),
     mk("Memorial do Convento", "José Saramago", "wishlist", 8),
     mk("Cem Anos de Solidão", "Gabriel García Márquez", "wishlist", 15),
     mk("A Insustentável Leveza do Ser", "Milan Kundera", "abandoned", 45, 150),
@@ -781,9 +1024,9 @@ function demoData() {
   const notes = [
     { id: uid(), bookId: books[0].id, type: "quote", page: 112, hasPhoto: false, createdAt: daysAgo(2),
       text: "Assim é que uma citação aparece: com o marcador amarelo por baixo, como se a tivesses sublinhado no papel." },
-    { id: uid(), bookId: books[0].id, type: "note", page: null, hasPhoto: false, createdAt: daysAgo(3),
+    { id: uid(), bookId: books[0].id, type: "thought", page: null, hasPhoto: false, createdAt: daysAgo(3),
       text: "Ler aos poucos, meia dúzia de fragmentos de cada vez. De seguida perde o efeito." },
-    { id: uid(), bookId: books[2].id, type: "note", page: 78, hasPhoto: false, createdAt: daysAgo(30),
+    { id: uid(), bookId: books[2].id, type: "summary", page: 78, hasPhoto: false, createdAt: daysAgo(30),
       text: "A cegueira como metáfora do que a sociedade escolhe não ver. Reler o capítulo da quarentena." },
   ];
 
@@ -830,4 +1073,14 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-refresh();
+// Pede ao browser para não deitar fora os dados quando o telemóvel ficar
+// com pouco espaço. Não é garantia, mas reduz muito o risco.
+if (navigator.storage && navigator.storage.persist) {
+  navigator.storage.persisted().then((already) => {
+    if (!already) navigator.storage.persist();
+  });
+}
+
+// Arranca a app e, uma vez por abertura, verifica se está na hora de
+// fazer cópia de segurança
+refresh().then(maybeShowBackupReminder);
