@@ -15,6 +15,7 @@
 const state = {
   view: "library",     // library | notes | add | settings
   filter: "reading",   // filtro da estante
+  ownFilter: "all",    // all | physical | digital | unread_owned
   bookQuery: "",       // pesquisa na estante
   bookSort: "recent",  // ordenação da estante
   noteType: "all",     // filtro do caderno
@@ -47,6 +48,18 @@ const NOTE_TYPES = {
   summary: "Resumo",
   thought: "Pensamento",
 };
+
+// Posse: independente do estado de leitura, de propósito. Um livro pode
+// estar "Lido" e continuar a ser teu, em papel, na prateleira.
+const OWNERSHIP = {
+  none: "Não tenho",
+  physical: "Tenho em papel",
+  digital: "Tenho em digital",
+};
+
+function ownership(book) {
+  return OWNERSHIP[book.ownership] ? book.ownership : "none";
+}
 
 function noteType(note) {
   return NOTE_TYPES[note.type] ? note.type : "thought";
@@ -335,16 +348,52 @@ function renderLibrary() {
   // Caso contrário procuravas "Tolstoi" em "A ler" e não encontravas nada
   // por ele estar em "Lido" — que é exatamente quando a pesquisa falha.
   const searching = term.length > 0;
-  const base = searching
-    ? books.filter((b) => normalize(b.title).includes(term) || normalize(b.author).includes(term))
-    : books.filter((b) => b.status === state.filter);
+
+  // O filtro de posse corre em paralelo ao de estado. "unread_owned" é o
+  // cruzamento das duas dimensões: livros que tens em casa e ainda não leste.
+  function matchesOwn(b) {
+    const own = ownership(b);
+    if (state.ownFilter === "all") return true;
+    if (state.ownFilter === "unread_owned") {
+      return own !== "none" && b.status !== "finished" && b.status !== "abandoned";
+    }
+    return own === state.ownFilter;
+  }
+
+  // "Por ler em casa" ignora o estado escolhido: a pergunta é sobre a
+  // prateleira, não sobre a gaveta em que o livro está arrumado
+  const wholeShelf = searching || state.ownFilter === "unread_owned";
+  const base = books
+    .filter((b) =>
+      searching
+        ? normalize(b.title).includes(term) || normalize(b.author).includes(term)
+        : wholeShelf || b.status === state.filter
+    )
+    .filter(matchesOwn);
   const shown = sortBooks(base, state.bookSort);
 
   const chips = Object.entries(STATUS)
     .map(([key, label]) => {
       const n = books.filter((b) => b.status === key).length;
-      return `<button class="rt-chip ${!searching && state.filter === key ? "rt-chip-on" : ""}" data-filter="${key}">
+      return `<button class="rt-chip ${!searching && !wholeShelf && state.filter === key ? "rt-chip-on" : ""}" data-filter="${key}">
         ${label}${n ? ` <em>${n}</em>` : ""}</button>`;
+    })
+    .join("");
+
+  const unreadOwned = books.filter(
+    (b) => ownership(b) !== "none" && b.status !== "finished" && b.status !== "abandoned"
+  ).length;
+  const ownChips = [
+    ["all", "Todos"],
+    ["unread_owned", "Por ler em casa"],
+    ["physical", "Em papel"],
+    ["digital", "Em digital"],
+  ]
+    .map(([k, label]) => {
+      let n = 0;
+      if (k === "unread_owned") n = unreadOwned;
+      else if (k !== "all") n = books.filter((b) => ownership(b) === k).length;
+      return `<button class="rt-chip rt-chip-own ${state.ownFilter === k ? "rt-chip-on" : ""}" data-own="${k}">${label}${n ? ` <em>${n}</em>` : ""}</button>`;
     })
     .join("");
 
@@ -362,15 +411,20 @@ function renderLibrary() {
               <h2 class="rt-book-title">${esc(b.title)}</h2>
               <p class="rt-book-author">${esc(b.author)}</p>
               ${Number(b.rating) ? starsHtml(b.rating, false) : ""}
-              <p class="rt-note-count">${searching ? STATUS[b.status] + " · " : ""}${n === 0 ? "sem notas" : n + (n === 1 ? " nota" : " notas")}</p>
+              <p class="rt-note-count">${wholeShelf ? STATUS[b.status] + " · " : ""}${ownership(b) !== "none" ? OWNERSHIP[ownership(b)] + " · " : ""}${n === 0 ? "sem notas" : n + (n === 1 ? " nota" : " notas")}</p>
             </div>
           </button></li>`;
         })
         .join("")}</ul>`
     : searching
       ? `<div class="rt-empty"><p>Nenhum livro corresponde a "${esc(state.bookQuery)}".</p></div>`
-      : `<div class="rt-empty"><p>Nada em "${STATUS[state.filter]}".</p>
-         <button class="rt-btn rt-btn-primary" data-go="add">Procurar um livro</button></div>`;
+      : state.ownFilter === "unread_owned"
+        ? `<div class="rt-empty"><p>Não há livros teus por ler.</p>
+           <p class="rt-hint">Marca um livro como "Tenho em papel" no ecrã dele.</p></div>`
+        : state.ownFilter !== "all"
+          ? `<div class="rt-empty"><p>Nenhum livro marcado como "${OWNERSHIP[state.ownFilter]}".</p></div>`
+          : `<div class="rt-empty"><p>Nada em "${STATUS[state.filter]}".</p>
+             <button class="rt-btn rt-btn-primary" data-go="add">Procurar um livro</button></div>`;
 
   app().innerHTML = `
     <main class="rt-main">
@@ -380,6 +434,7 @@ function renderLibrary() {
       </header>
       <input class="rt-input" id="bookFilterSearch" placeholder="Procurar por título ou autor…" value="${esc(state.bookQuery)}">
       <div class="rt-filters">${chips}</div>
+      <div class="rt-filters rt-filters-tight">${ownChips}</div>
       <div class="rt-sortbar">
         <span class="rt-meta">${searching ? shown.length + (shown.length === 1 ? " resultado" : " resultados") : "Ordenar por"}</span>
         <select class="rt-select" id="bookSort">${sortOptions}</select>
@@ -398,10 +453,14 @@ function renderLibrary() {
   };
   $("#bookSort").onchange = (e) => { state.bookSort = e.target.value; render(); };
 
+  app().querySelectorAll("[data-own]").forEach((el) => {
+    el.onclick = () => { state.ownFilter = el.dataset.own; render(); };
+  });
   app().querySelectorAll("[data-filter]").forEach((el) => {
     el.onclick = () => {
       state.filter = el.dataset.filter;
       state.bookQuery = "";  // escolher um estado limpa a pesquisa
+      if (state.ownFilter === "unread_owned") state.ownFilter = "all";
       render();
     };
   });
@@ -652,6 +711,10 @@ function renderBook(book) {
     .map(([k, v]) => `<option value="${k}" ${book.status === k ? "selected" : ""}>${v}</option>`)
     .join("");
 
+  const ownOptions = Object.entries(OWNERSHIP)
+    .map(([k, v]) => `<option value="${k}" ${ownership(book) === k ? "selected" : ""}>${v}</option>`)
+    .join("");
+
   const list = mine.length
     ? `<ul class="rt-notes">${mine
         .map(
@@ -670,11 +733,15 @@ function renderBook(book) {
     <main class="rt-main rt-detail">
       <button class="rt-back" id="back">&larr; Estante</button>
       <div class="rt-detail-head">
-        ${coverHtml(book, "lg")}
+        <div class="rt-cover-slot">
+          ${coverHtml(book, "lg")}
+          ${book.cover ? "" : `<button class="rt-cover-find" id="findCover">Procurar capa</button>`}
+        </div>
         <div>
           <h1 class="rt-detail-title">${esc(book.title)}</h1>
           <p class="rt-book-author">${esc(book.author)}</p>
           <select class="rt-select" id="statusSel">${options}</select>
+          <select class="rt-select" id="ownSel">${ownOptions}</select>
           ${starsHtml(book.rating, true)}
           ${book.finishedAt ? `<p class="rt-meta rt-meta-block">Terminado a ${formatDate(book.finishedAt)}</p>` : ""}
         </div>
@@ -701,6 +768,13 @@ function renderBook(book) {
     await DB.putBook(patch);
     await refresh();
   };
+  $("#ownSel").onchange = async (e) => {
+    await DB.putBook({ ...book, ownership: e.target.value, updatedAt: new Date().toISOString() });
+    await refresh();
+  };
+  const findCover = $("#findCover");
+  if (findCover) findCover.onclick = () => searchCover(book, findCover);
+
   // Estrelas: tocar numa põe essa avaliação; tocar na atual limpa-a
   app().querySelectorAll("[data-star]").forEach((el) => {
     el.onclick = async () => {
@@ -727,6 +801,53 @@ function renderBook(book) {
   };
   bindZoom();
   fillPhotos();
+}
+
+/**
+ * Procura a capa do livro na Open Library. Serve para os livros
+ * adicionados à mão ou importados sem capa. Tenta primeiro pelo ISBN,
+ * que é exato; se não houver, procura por título e autor.
+ */
+async function searchCover(book, btn) {
+  btn.disabled = true;
+  btn.textContent = "A procurar…";
+  try {
+    let cover = null;
+    if (book.isbn) {
+      // O endereço por ISBN devolve uma imagem vazia de 1px quando não
+      // existe; o parâmetro default=false faz devolver erro 404, que é
+      // o que precisamos para saber se há mesmo capa
+      const url = `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(book.isbn)}-M.jpg?default=false`;
+      const res = await fetch(url, { method: "HEAD" });
+      if (res.ok) cover = url;
+    }
+    if (!cover) {
+      const q = encodeURIComponent(`${book.title} ${book.author}`);
+      const res = await fetch(
+        `https://openlibrary.org/search.json?limit=1&fields=cover_i,title&q=${q}`
+      );
+      if (res.ok) {
+        const json = await res.json();
+        const doc = (json.docs || [])[0];
+        if (doc && doc.cover_i) {
+          cover = `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`;
+        }
+      }
+    }
+    if (!cover) {
+      btn.disabled = false;
+      btn.textContent = "Procurar capa";
+      notify("Não encontrei capa para este livro");
+      return;
+    }
+    await DB.putBook({ ...book, cover, updatedAt: new Date().toISOString() });
+    await refresh();
+    notify("Capa encontrada");
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "Procurar capa";
+    notify("Sem ligação à Open Library");
+  }
 }
 
 /* ---------------- Ecrã: Nova nota ---------------- */
@@ -963,6 +1084,12 @@ function renderSettings() {
         <button class="rt-btn rt-btn-full" id="install" hidden>Instalar no telemóvel</button>
       </div>
 
+      <h2 class="rt-section-title">Capas</h2>
+      <div class="rt-panel">
+        <p class="rt-hint" id="coverState"></p>
+        <button class="rt-btn rt-btn-full" id="findCovers">Procurar capas em falta</button>
+      </div>
+
       <h2 class="rt-section-title">Testes</h2>
       <div class="rt-panel">
         <p class="rt-hint">Enche a estante com oito livros e três notas, para experimentares
@@ -1016,6 +1143,47 @@ function renderSettings() {
     };
     reader.readAsText(file);
   };
+  // Capas em falta
+  const missing = books.filter((b) => !b.cover);
+  const coverState = $("#coverState");
+  const coverBtn = $("#findCovers");
+  coverState.textContent = missing.length
+    ? `${missing.length} ${missing.length === 1 ? "livro sem capa" : "livros sem capa"}. Precisa de ligação à internet.`
+    : "Todos os livros têm capa.";
+  coverBtn.disabled = missing.length === 0;
+  coverBtn.onclick = async () => {
+    coverBtn.disabled = true;
+    let found = 0;
+    for (let i = 0; i < missing.length; i++) {
+      const b = missing[i];
+      coverBtn.textContent = `A procurar… ${i + 1}/${missing.length}`;
+      try {
+        const q = encodeURIComponent(`${b.title} ${b.author}`);
+        const res = await fetch(
+          `https://openlibrary.org/search.json?limit=1&fields=cover_i&q=${q}`
+        );
+        if (res.ok) {
+          const doc = ((await res.json()).docs || [])[0];
+          if (doc && doc.cover_i) {
+            await DB.putBook({
+              ...b,
+              cover: `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`,
+              updatedAt: new Date().toISOString(),
+            });
+            found++;
+          }
+        }
+      } catch (e) {
+        break; // sem rede: não vale a pena continuar
+      }
+      // Uma pausa curta entre pedidos, para não sobrecarregar um serviço
+      // gratuito que nos está a dar isto de graça
+      await new Promise((r) => setTimeout(r, 350));
+    }
+    await refresh();
+    notify(found ? `${found} ${found === 1 ? "capa encontrada" : "capas encontradas"}` : "Nenhuma capa encontrada");
+  };
+
   $("#demo").onclick = async () => {
     const demo = demoData();
     for (const b of demo.books) await DB.putBook(b);
@@ -1075,21 +1243,22 @@ function downloadJson(obj, name) {
 function demoData() {
   const daysAgo = (d) => new Date(Date.now() - d * 86400000).toISOString();
   const dayOnly = (d) => daysAgo(d).slice(0, 10);
-  const mk = (title, author, status, age, started, finished, rating) => ({
+  const mk = (title, author, status, age, started, finished, rating, own) => ({
     id: uid(), title, author, cover: null, isbn: null, status, rating: rating || 0,
+    ownership: own || "none",
     startedAt: started != null ? dayOnly(started) : null,
     finishedAt: finished != null ? dayOnly(finished) : null,
     createdAt: daysAgo(age), updatedAt: daysAgo(age),
   });
 
   const books = [
-    mk("Livro do Desassossego", "Bernardo Soares / Fernando Pessoa", "reading", 2, 40),
+    mk("Livro do Desassossego", "Bernardo Soares / Fernando Pessoa", "reading", 2, 40, 0, "physical"),
     mk("O Deserto dos Tártaros", "Dino Buzzati", "reading", 5, 12),
     mk("Ensaio sobre a Cegueira", "José Saramago", "finished", 20, 90, 25, 5),
     mk("Os Maias", "Eça de Queirós", "finished", 60, 200, 70, 4),
     mk("Sapiens", "Yuval Noah Harari", "finished", 120, 180, 130, 3.5),
-    mk("Memorial do Convento", "José Saramago", "wishlist", 8),
-    mk("Cem Anos de Solidão", "Gabriel García Márquez", "wishlist", 15),
+    mk("Memorial do Convento", "José Saramago", "wishlist", 8, null, null, 0, "physical"),
+    mk("Cem Anos de Solidão", "Gabriel García Márquez", "wishlist", 15, null, null, 0, "digital"),
     mk("A Insustentável Leveza do Ser", "Milan Kundera", "abandoned", 45, 150),
   ];
 
