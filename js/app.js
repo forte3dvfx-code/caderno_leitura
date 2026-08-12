@@ -15,6 +15,8 @@
 const state = {
   view: "library",     // library | notes | add | settings
   filter: "reading",   // filtro da estante
+  bookQuery: "",       // pesquisa na estante
+  bookSort: "recent",  // ordenação da estante
   noteType: "all",     // filtro do caderno
   query: "",           // pesquisa no caderno
   bookNoteOrder: "asc",  // dentro de um livro: pela ordem em que foram escritas
@@ -109,6 +111,18 @@ function starsHtml(rating, interactive) {
     <div class="rt-stars-fill" style="width:${pct}%">★★★★★</div>
     ${hits}
   </div>`;
+}
+
+/**
+ * Tira os acentos e passa a minúsculas, para a pesquisa funcionar como
+ * se espera em português: "confissao" tem de encontrar "Confissão" e
+ * "eca" tem de encontrar "Eça".
+ */
+function normalize(s) {
+  return String(s == null ? "" : s)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
 }
 
 function initials(title) {
@@ -284,22 +298,58 @@ function coverHtml(book, size) {
   return `<div class="rt-cover rt-cover-${size} rt-cover-fallback"><span>${esc(initials(book.title))}</span></div>`;
 }
 
+const BOOK_SORTS = {
+  recent: "Mais recentes",
+  title: "Título",
+  author: "Autor",
+  rating: "Avaliação",
+  finished: "Data de conclusão",
+};
+
+/**
+ * Ordena os livros. O localeCompare com "pt" trata os acentos como se
+ * espera num índice: Água antes de Azul, e não depois de Zebra.
+ */
+function sortBooks(list, mode) {
+  const byTitle = (a, b) => a.title.localeCompare(b.title, "pt");
+  const sorted = list.slice();
+  if (mode === "title") sorted.sort(byTitle);
+  else if (mode === "author") sorted.sort((a, b) => a.author.localeCompare(b.author, "pt") || byTitle(a, b));
+  else if (mode === "rating") sorted.sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0) || byTitle(a, b));
+  else if (mode === "finished") {
+    // Livros sem data de conclusão vão para o fim, não para o topo
+    sorted.sort((a, b) => String(b.finishedAt || "").localeCompare(String(a.finishedAt || "")) || byTitle(a, b));
+  } else sorted.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  return sorted;
+}
+
 function renderLibrary() {
   const year = new Date().getFullYear();
   const finishedThisYear = books.filter(
     (b) => b.status === "finished" && b.finishedAt && b.finishedAt.startsWith(String(year))
   ).length;
 
-  const shown = books
-    .filter((b) => b.status === state.filter)
-    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  const term = normalize(state.bookQuery.trim());
+
+  // Ao pesquisar, procura em toda a estante e não só no estado escolhido.
+  // Caso contrário procuravas "Tolstoi" em "A ler" e não encontravas nada
+  // por ele estar em "Lido" — que é exatamente quando a pesquisa falha.
+  const searching = term.length > 0;
+  const base = searching
+    ? books.filter((b) => normalize(b.title).includes(term) || normalize(b.author).includes(term))
+    : books.filter((b) => b.status === state.filter);
+  const shown = sortBooks(base, state.bookSort);
 
   const chips = Object.entries(STATUS)
     .map(([key, label]) => {
       const n = books.filter((b) => b.status === key).length;
-      return `<button class="rt-chip ${state.filter === key ? "rt-chip-on" : ""}" data-filter="${key}">
+      return `<button class="rt-chip ${!searching && state.filter === key ? "rt-chip-on" : ""}" data-filter="${key}">
         ${label}${n ? ` <em>${n}</em>` : ""}</button>`;
     })
+    .join("");
+
+  const sortOptions = Object.entries(BOOK_SORTS)
+    .map(([k, label]) => `<option value="${k}" ${state.bookSort === k ? "selected" : ""}>${label}</option>`)
     .join("");
 
   const list = shown.length
@@ -312,13 +362,15 @@ function renderLibrary() {
               <h2 class="rt-book-title">${esc(b.title)}</h2>
               <p class="rt-book-author">${esc(b.author)}</p>
               ${Number(b.rating) ? starsHtml(b.rating, false) : ""}
-              <p class="rt-note-count">${n === 0 ? "sem notas" : n + (n === 1 ? " nota" : " notas")}</p>
+              <p class="rt-note-count">${searching ? STATUS[b.status] + " · " : ""}${n === 0 ? "sem notas" : n + (n === 1 ? " nota" : " notas")}</p>
             </div>
           </button></li>`;
         })
         .join("")}</ul>`
-    : `<div class="rt-empty"><p>Nada em "${STATUS[state.filter]}".</p>
-       <button class="rt-btn rt-btn-primary" data-go="add">Procurar um livro</button></div>`;
+    : searching
+      ? `<div class="rt-empty"><p>Nenhum livro corresponde a "${esc(state.bookQuery)}".</p></div>`
+      : `<div class="rt-empty"><p>Nada em "${STATUS[state.filter]}".</p>
+         <button class="rt-btn rt-btn-primary" data-go="add">Procurar um livro</button></div>`;
 
   app().innerHTML = `
     <main class="rt-main">
@@ -326,12 +378,32 @@ function renderLibrary() {
         <h1 class="rt-title">A minha estante</h1>
         <p class="rt-subtitle">${books.length} livros · ${notes.length} notas · ${finishedThisYear} lidos em ${year}</p>
       </header>
+      <input class="rt-input" id="bookFilterSearch" placeholder="Procurar por título ou autor…" value="${esc(state.bookQuery)}">
       <div class="rt-filters">${chips}</div>
+      <div class="rt-sortbar">
+        <span class="rt-meta">${searching ? shown.length + (shown.length === 1 ? " resultado" : " resultados") : "Ordenar por"}</span>
+        <select class="rt-select" id="bookSort">${sortOptions}</select>
+      </div>
       ${list}
     </main>`;
 
+  const search = $("#bookFilterSearch");
+  search.oninput = () => {
+    state.bookQuery = search.value;
+    const pos = search.selectionStart;
+    render();
+    const again = $("#bookFilterSearch");
+    again.focus();
+    again.setSelectionRange(pos, pos);
+  };
+  $("#bookSort").onchange = (e) => { state.bookSort = e.target.value; render(); };
+
   app().querySelectorAll("[data-filter]").forEach((el) => {
-    el.onclick = () => { state.filter = el.dataset.filter; render(); };
+    el.onclick = () => {
+      state.filter = el.dataset.filter;
+      state.bookQuery = "";  // escolher um estado limpa a pesquisa
+      render();
+    };
   });
   app().querySelectorAll("[data-book]").forEach((el) => {
     el.onclick = () => { state.openBookId = el.dataset.book; render(); };
