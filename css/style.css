@@ -47,6 +47,12 @@ body {
 .rt-chip em { font-style: normal; opacity: 0.6; margin-left: 3px; }
 .rt-chip-on { background: var(--ink); border-color: var(--ink); color: #fff; }
 
+.rt-sortbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin: 0 0 12px;
+}
+.rt-sortbar .rt-select { margin-top: 0; }
+
 /* Cartões de livro */
 .rt-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
 .rt-card {
