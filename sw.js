@@ -10,13 +10,14 @@
    a versão antiga.
    ================================================================== */
 
-const CACHE_NAME = "caderno-leitura-v9";
+const CACHE_NAME = "caderno-leitura-v10";
 
 const APP_FILES = [
   "./",
   "index.html",
   "css/style.css",
   "js/db.js",
+  "js/covers.js",
   "js/app.js",
   "manifest.json",
   "icons/icon-192.png",
