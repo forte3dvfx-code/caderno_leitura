@@ -980,6 +980,40 @@ async function saveNote(book) {
   await refresh();
 }
 
+/**
+ * Envia o ficheiro para o menu de partilha do sistema (Drive, email, etc).
+ * Só existe em HTTPS e em browsers que o suportem — no computador quase
+ * nunca está disponível, por isso verificamos antes de mostrar o botão.
+ */
+function canShareFiles() {
+  return !!(navigator.canShare && navigator.share);
+}
+
+async function shareBackup(withPhotos) {
+  const data = await DB.exportData(withPhotos);
+  const name = withPhotos ? `leituras-completo-${today()}.json` : `leituras-${today()}.json`;
+  const file = new File([JSON.stringify(data, null, 2)], name, { type: "application/json" });
+
+  if (!navigator.canShare({ files: [file] })) {
+    // O browser sabe partilhar texto mas não ficheiros: descarrega
+    downloadJson(data, name);
+    markBackupDone();
+    notify("O teu browser não partilha ficheiros; descarreguei-o");
+    return;
+  }
+  try {
+    await navigator.share({ files: [file], title: "Caderno de Leitura" });
+    markBackupDone();
+    notify("Cópia enviada");
+  } catch (e) {
+    // O utilizador fechou o menu de partilha: não é erro nem é cópia feita
+    if (e && e.name === "AbortError") return;
+    downloadJson(data, name);
+    markBackupDone();
+    notify("Não consegui partilhar; descarreguei o ficheiro");
+  }
+}
+
 /* ---------------- Aviso de cópia de segurança ---------------- */
 
 /**
@@ -1016,7 +1050,7 @@ function showBackupDialog(days, never) {
         Se limpares os dados do browser, ${books.length} livros e ${notes.length} notas
         desaparecem sem volta.
       </p>
-      <button class="rt-btn rt-btn-primary rt-btn-full" id="mExport">Exportar agora</button>
+      <button class="rt-btn rt-btn-primary rt-btn-full" id="mExport">${canShareFiles() ? "Enviar cópia" : "Exportar agora"}</button>
       <button class="rt-btn rt-btn-full" id="mSnooze">Lembrar amanhã</button>
       <button class="rt-link" id="mOff">Não voltar a avisar</button>
     </div>`;
@@ -1025,10 +1059,16 @@ function showBackupDialog(days, never) {
   const close = () => wrap.remove();
 
   wrap.querySelector("#mExport").onclick = async () => {
-    downloadJson(await DB.exportData(false), `leituras-${today()}.json`);
-    markBackupDone();
+    const btn = wrap.querySelector("#mExport");
+    btn.disabled = true;
+    if (canShareFiles()) {
+      await shareBackup(false);
+    } else {
+      downloadJson(await DB.exportData(false), `leituras-${today()}.json`);
+      markBackupDone();
+      notify("Cópia exportada");
+    }
     close();
-    notify("Cópia exportada");
   };
   wrap.querySelector("#mSnooze").onclick = () => {
     prefs.snoozeUntil = new Date(Date.now() + 86400000).toISOString();
@@ -1060,6 +1100,7 @@ function renderSettings() {
         e serve para cópias frequentes; o completo inclui as fotos e fica grande depressa.</p>
         <button class="rt-btn rt-btn-full" id="expText">Exportar só o texto</button>
         <button class="rt-btn rt-btn-full" id="expAll">Exportar tudo, com fotos</button>
+        <button class="rt-btn rt-btn-full" id="shareText" hidden>Enviar para o Drive, email…</button>
         <button class="rt-btn rt-btn-full" id="imp">Importar JSON</button>
         <input type="file" id="impInput" accept="application/json" hidden>
         <p class="rt-hint" id="usage"></p>
@@ -1111,6 +1152,19 @@ function renderSettings() {
     markBackupDone();
     renderSettings();
   };
+
+  // O botão de partilha só aparece onde o sistema o suporta — no
+  // computador quase nunca, no Android quase sempre
+  const shareBtn = $("#shareText");
+  if (canShareFiles()) {
+    shareBtn.hidden = false;
+    shareBtn.onclick = async () => {
+      shareBtn.disabled = true;
+      await shareBackup(false);
+      shareBtn.disabled = false;
+      renderSettings();
+    };
+  }
 
   // Estado das cópias e escolha do intervalo
   const sel = $("#backupDays");
