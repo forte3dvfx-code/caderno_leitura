@@ -15,7 +15,7 @@
 // Sobe sempre que os ficheiros mudam. Aparece no ecrã Dados, para se
 // saber num relance se o telemóvel já está a servir a versão nova ou
 // ainda tem a antiga em cache.
-const APP_VERSION = "v12";
+const APP_VERSION = "v13";
 
 const state = {
   view: "library",     // library | notes | add | settings
