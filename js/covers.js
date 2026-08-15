@@ -87,11 +87,14 @@ const Covers = (function () {
     return String(author || "").split(",")[0].trim();
   }
 
+  // A Google Books tem melhor cobertura de edições portuguesas, mas só
+  // devolve miniaturas de 128px, que ficam desfocadas ao serem mostradas
+  // em tamanho normal. A Open Library dá imagens grandes, por isso é a
+  // única fonte usada. O código da Google Books ficou aqui em baixo,
+  // desativado, caso um dia a cobertura pese mais que a nitidez.
   const SOURCES = [
     { name: "Open Library (ISBN)", fn: fromOpenLibraryIsbn },
-    { name: "Google Books", fn: fromGoogleBooks },
     { name: "Open Library", fn: fromOpenLibraryTitle },
-    { name: "Wikidata", fn: fromWikidata },
   ];
 
   /**
