@@ -352,10 +352,32 @@ function coverHtml(book, size) {
     return `<img class="rt-cover rt-cover-${size}" data-cover-id="${book.id}" alt="">`;
   }
   if (book.cover) {
-    return `<img class="rt-cover rt-cover-${size}" src="${esc(book.cover)}" alt=""
-      onerror="this.outerHTML='${fallback.replace(/'/g, "\\'")}'">`;
+    // O que fazer se a imagem falhar é tratado em bindCoverFallbacks;
+    // meter HTML dentro de um atributo onerror parte com as aspas
+    return `<img class="rt-cover rt-cover-${size}" src="${esc(book.cover)}"
+      data-fallback="${esc(initials(book.title))}" data-size="${size}" alt="">`;
   }
   return fallback;
+}
+
+/**
+ * Troca por um retângulo com as iniciais qualquer capa que não carregue.
+ * Corre depois de cada desenho do ecrã.
+ */
+function bindCoverFallbacks() {
+  app().querySelectorAll("img[data-fallback]").forEach((img) => {
+    const swap = () => {
+      const div = document.createElement("div");
+      div.className = `rt-cover rt-cover-${img.dataset.size} rt-cover-fallback`;
+      const span = document.createElement("span");
+      span.textContent = img.dataset.fallback;
+      div.appendChild(span);
+      if (img.parentNode) img.parentNode.replaceChild(div, img);
+    };
+    img.onerror = swap;
+    // A imagem pode já ter falhado antes de chegarmos aqui
+    if (img.complete && img.naturalWidth === 0) swap();
+  });
 }
 
 const BOOK_SORTS = {
@@ -517,6 +539,7 @@ function renderLibrary() {
   const go = app().querySelector("[data-go]");
   if (go) go.onclick = () => { state.view = "add"; render(); };
   fillCovers();
+  bindCoverFallbacks();
 }
 
 /* ---------------- Ecrã: Caderno (todas as notas) ---------------- */
@@ -695,6 +718,7 @@ function renderAdd() {
       addBook({ title, author: $("#mAuthor").value.trim() || "Autor desconhecido" }, el.dataset.manual);
     };
   });
+  bindCoverFallbacks();
 }
 
 async function searchBooks(query) {
@@ -850,6 +874,8 @@ function renderBook(book) {
   };
   bindZoom();
   fillPhotos();
+  fillCovers();
+  bindCoverFallbacks();
 }
 
 /**
