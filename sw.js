@@ -1,16 +1,25 @@
 /* ==================================================================
    sw.js — o service worker
 
-   É um pequeno programa que fica entre a app e a rede. Guarda os
-   ficheiros da app na primeira visita; nas seguintes serve-os do
-   telemóvel, mesmo sem ligação.
+   É um pequeno programa que fica entre a app e a rede. Guarda cópias
+   dos ficheiros para a app funcionar sem ligação.
 
-   IMPORTANTE: sempre que mudares algum ficheiro da app, aumenta o
-   número em CACHE_NAME. Caso contrário o telemóvel continua a mostrar
-   a versão antiga.
+   ESTRATÉGIA, e a razão dela:
+
+   - Ficheiros da app (HTML, CSS, JS): REDE PRIMEIRO, cache como recurso.
+     A versão anterior fazia o contrário, e o resultado era ficar preso a
+     código antigo mesmo depois de publicar ficheiros novos. Assim, com
+     rede tens sempre a versão mais recente; sem rede, tens a última que
+     ficou guardada.
+
+   - Imagens externas (capas): CACHE PRIMEIRO. São imutáveis e pesadas;
+     não faz sentido ir buscá-las à rede de cada vez.
+
+   Continua a valer a pena aumentar CACHE_NAME quando publicas ficheiros
+   novos, mas já não é isso que decide se a atualização chega.
    ================================================================== */
 
-const CACHE_NAME = "caderno-leitura-v12";
+const CACHE_NAME = "caderno-leitura-v13";
 
 const APP_FILES = [
   "./",
@@ -24,22 +33,22 @@ const APP_FILES = [
   "icons/icon-512.png",
 ];
 
-// Instalação: guarda os ficheiros da app
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_FILES))
   );
-  self.skipWaiting();
+  self.skipWaiting();  // entra em vigor sem esperar que feches a app
 });
 
-// Ativação: deita fora as versões antigas da cache
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((names) =>
-      Promise.all(names.filter((n) => n !== CACHE_NAME).map((n) => caches.delete(n)))
-    )
+    caches
+      .keys()
+      .then((names) =>
+        Promise.all(names.filter((n) => n !== CACHE_NAME).map((n) => caches.delete(n)))
+      )
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
 self.addEventListener("fetch", (event) => {
@@ -47,14 +56,37 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;
 
   const url = new URL(req.url);
+  const sameOrigin = url.origin === self.location.origin;
 
-  // A pesquisa de livros precisa sempre de dados frescos: nunca da cache
-  if (url.hostname === "openlibrary.org") return;
+  // A pesquisa de livros precisa sempre de dados frescos
+  if (url.hostname === "openlibrary.org" || url.hostname === "www.googleapis.com") return;
 
-  // As capas dos livros vêm de fora: guarda-as assim que chegarem,
-  // para aparecerem offline na próxima vez
-  const isExternal = url.origin !== self.location.origin;
+  if (sameOrigin) {
+    // REDE PRIMEIRO: uma versão nova chega assim que existe
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(req, copy));
+          }
+          return res;
+        })
+        .catch(async () => {
+          // Sem rede: usa a cópia guardada
+          const cached = await caches.match(req);
+          if (cached) return cached;
+          if (req.mode === "navigate") {
+            const index = await caches.match("index.html");
+            if (index) return index;
+          }
+          return new Response("", { status: 504 });
+        })
+    );
+    return;
+  }
 
+  // CACHE PRIMEIRO para o que vem de fora (capas): não muda e é pesado
   event.respondWith(
     caches.match(req).then((cached) => {
       if (cached) return cached;
@@ -66,11 +98,7 @@ self.addEventListener("fetch", (event) => {
           }
           return res;
         })
-        .catch(() => {
-          // Sem rede e sem cópia guardada: devolve a página inicial
-          if (!isExternal && req.mode === "navigate") return caches.match("index.html");
-          return new Response("", { status: 504 });
-        });
+        .catch(() => new Response("", { status: 504 }));
     })
   );
 });
