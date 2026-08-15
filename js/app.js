@@ -991,27 +991,40 @@ function canShareFiles() {
 
 async function shareBackup(withPhotos) {
   const data = await DB.exportData(withPhotos);
-  const name = withPhotos ? `leituras-completo-${today()}.json` : `leituras-${today()}.json`;
-  const file = new File([JSON.stringify(data, null, 2)], name, { type: "application/json" });
+  const base = withPhotos ? `leituras-completo-${today()}` : `leituras-${today()}`;
+  const body = JSON.stringify(data, null, 2);
 
-  if (!navigator.canShare({ files: [file] })) {
-    // O browser sabe partilhar texto mas não ficheiros: descarrega
-    downloadJson(data, name);
-    markBackupDone();
-    notify("O teu browser não partilha ficheiros; descarreguei-o");
-    return;
+  // Alguns Android recusam application/json na partilha e aceitam
+  // text/plain. Tentamos os dois antes de desistir; a extensão .txt
+  // acompanha o tipo para o sistema não estranhar.
+  const attempts = [
+    { name: base + ".json", type: "application/json" },
+    { name: base + ".txt", type: "text/plain" },
+  ];
+
+  let lastError = null;
+  for (const a of attempts) {
+    const file = new File([body], a.name, { type: a.type });
+    try {
+      if (!navigator.canShare({ files: [file] })) continue;
+      await navigator.share({ files: [file], title: "Caderno de Leitura" });
+      markBackupDone();
+      notify("Cópia enviada");
+      return;
+    } catch (e) {
+      // O utilizador fechou o menu: não é falha nem é cópia feita
+      if (e && e.name === "AbortError") return;
+      lastError = e;
+    }
   }
-  try {
-    await navigator.share({ files: [file], title: "Caderno de Leitura" });
-    markBackupDone();
-    notify("Cópia enviada");
-  } catch (e) {
-    // O utilizador fechou o menu de partilha: não é erro nem é cópia feita
-    if (e && e.name === "AbortError") return;
-    downloadJson(data, name);
-    markBackupDone();
-    notify("Não consegui partilhar; descarreguei o ficheiro");
-  }
+
+  downloadJson(data, base + ".json");
+  markBackupDone();
+  notify(
+    lastError
+      ? `A partilha falhou (${lastError.name || "erro"}); descarreguei o ficheiro`
+      : "O teu browser não partilha ficheiros; descarreguei-o"
+  );
 }
 
 /* ---------------- Aviso de cópia de segurança ---------------- */
