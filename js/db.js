@@ -16,7 +16,7 @@
 
 const DB = (function () {
   const DB_NAME = "leitura";
-  const DB_VERSION = 1;
+  const DB_VERSION = 2;
   let dbPromise = null;
 
   function open() {
@@ -34,6 +34,11 @@ const DB = (function () {
         }
         if (!db.objectStoreNames.contains("photos")) {
           db.createObjectStore("photos", { keyPath: "id" });
+        }
+        // Versão 2: capas guardadas no dispositivo, para não dependerem
+        // de sites externos que um dia mudam os endereços
+        if (!db.objectStoreNames.contains("covers")) {
+          db.createObjectStore("covers", { keyPath: "id" });
         }
       };
       req.onsuccess = () => resolve(req.result);
@@ -79,6 +84,7 @@ const DB = (function () {
   async function deleteBook(bookId) {
     const notes = await getNotesOf(bookId);
     for (const n of notes) await deleteNote(n.id);
+    await remove("covers", bookId);
     await remove("books", bookId);
   }
 
@@ -104,6 +110,22 @@ const DB = (function () {
   async function getPhoto(id) {
     const row = await get("photos", id);
     return row ? row.blob : null;
+  }
+
+  /* ---------- Capas guardadas no dispositivo ---------- */
+
+  const putCover = (id, blob) => put("covers", { id, blob });
+
+  async function getCover(id) {
+    const row = await get("covers", id);
+    return row ? row.blob : null;
+  }
+
+  const deleteCover = (id) => remove("covers", id);
+
+  async function coverIds() {
+    const s = await store("covers", "readonly");
+    return wrap(s.getAllKeys());
   }
 
   /* ---------- Exportar e importar ---------- */
@@ -137,6 +159,11 @@ const DB = (function () {
       for (const row of rows) {
         out.photos[row.id] = await blobToBase64(row.blob);
       }
+      out.covers = {};
+      const covers = await getAll("covers");
+      for (const row of covers) {
+        out.covers[row.id] = await blobToBase64(row.blob);
+      }
     }
     return out;
   }
@@ -152,14 +179,20 @@ const DB = (function () {
         await putPhoto(id, await base64ToBlob(dataUrl));
       }
     }
+    if (data.covers) {
+      for (const [id, dataUrl] of Object.entries(data.covers)) {
+        await putCover(id, await base64ToBlob(dataUrl));
+      }
+    }
   }
 
   async function clearAll() {
     const db = await open();
-    const tx = db.transaction(["books", "notes", "photos"], "readwrite");
+    const tx = db.transaction(["books", "notes", "photos", "covers"], "readwrite");
     tx.objectStore("books").clear();
     tx.objectStore("notes").clear();
     tx.objectStore("photos").clear();
+    tx.objectStore("covers").clear();
     return new Promise((resolve, reject) => {
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
@@ -177,6 +210,7 @@ const DB = (function () {
     getBooks, putBook, deleteBook,
     getNotes, getNotesOf, putNote, deleteNote,
     putPhoto, getPhoto,
+    putCover, getCover, deleteCover, coverIds,
     exportData, importData, clearAll, usage,
   };
 })();

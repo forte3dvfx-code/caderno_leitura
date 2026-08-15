@@ -202,6 +202,47 @@ function markBackupDone() {
   savePrefs();
 }
 
+/* ---------------- Capas ---------------- */
+
+// Endereços temporários das capas guardadas, para não ir buscar o mesmo
+// blob à base de dados a cada redesenho
+const coverUrls = new Map();
+let localCovers = new Set();  // ids dos livros com capa guardada
+
+async function refreshLocalCovers() {
+  try {
+    localCovers = new Set(await DB.coverIds());
+  } catch (e) {
+    localCovers = new Set();
+  }
+}
+
+async function localCoverUrl(bookId) {
+  if (coverUrls.has(bookId)) return coverUrls.get(bookId);
+  const blob = await DB.getCover(bookId);
+  if (!blob) return null;
+  const url = URL.createObjectURL(blob);
+  coverUrls.set(bookId, url);
+  return url;
+}
+
+function forgetCover(bookId) {
+  if (coverUrls.has(bookId)) {
+    URL.revokeObjectURL(coverUrls.get(bookId));
+    coverUrls.delete(bookId);
+  }
+  localCovers.delete(bookId);
+}
+
+// Preenche as capas locais depois de o ecrã estar desenhado
+async function fillCovers() {
+  const slots = app().querySelectorAll("img[data-cover-id]");
+  for (const img of slots) {
+    const url = await localCoverUrl(img.dataset.coverId);
+    if (url) img.src = url;
+  }
+}
+
 /* ---------------- Fotos ---------------- */
 
 // Guarda os endereços temporários das imagens para os poder libertar
@@ -271,6 +312,7 @@ function compressImage(file, maxSide = 1600, quality = 0.8) {
 async function refresh() {
   books = await DB.getBooks();
   notes = await DB.getNotes();
+  await refreshLocalCovers();
   render();
 }
 
@@ -304,11 +346,16 @@ function render() {
 /* ---------------- Ecrã: Estante ---------------- */
 
 function coverHtml(book, size) {
+  const fallback = `<div class="rt-cover rt-cover-${size} rt-cover-fallback"><span>${esc(initials(book.title))}</span></div>`;
+  // Capa guardada no dispositivo: preenchida logo a seguir por fillCovers
+  if (book.id && localCovers.has(book.id)) {
+    return `<img class="rt-cover rt-cover-${size}" data-cover-id="${book.id}" alt="">`;
+  }
   if (book.cover) {
     return `<img class="rt-cover rt-cover-${size}" src="${esc(book.cover)}" alt=""
-      onerror="this.outerHTML='<div class=\\'rt-cover rt-cover-${size} rt-cover-fallback\\'><span>${esc(initials(book.title))}</span></div>'">`;
+      onerror="this.outerHTML='${fallback.replace(/'/g, "\\'")}'">`;
   }
-  return `<div class="rt-cover rt-cover-${size} rt-cover-fallback"><span>${esc(initials(book.title))}</span></div>`;
+  return fallback;
 }
 
 const BOOK_SORTS = {
@@ -469,6 +516,7 @@ function renderLibrary() {
   });
   const go = app().querySelector("[data-go]");
   if (go) go.onclick = () => { state.view = "add"; render(); };
+  fillCovers();
 }
 
 /* ---------------- Ecrã: Caderno (todas as notas) ---------------- */
@@ -795,6 +843,7 @@ function renderBook(book) {
   $("#delBook").onclick = async () => {
     if (!confirm("Apagar este livro e todas as suas notas?")) return;
     for (const n of mine) forgetPhoto(n.id);
+    forgetCover(book.id);
     await DB.deleteBook(book.id);
     state.openBookId = null;
     await refresh();
@@ -804,49 +853,35 @@ function renderBook(book) {
 }
 
 /**
- * Procura a capa do livro na Open Library. Serve para os livros
- * adicionados à mão ou importados sem capa. Tenta primeiro pelo ISBN,
- * que é exato; se não houver, procura por título e autor.
+ * Procura a capa de um livro nas várias fontes e guarda-a no
+ * dispositivo. Se o download falhar (acontece: nem todos os servidores
+ * autorizam o browser a ler a imagem), fica pelo menos o endereço.
  */
 async function searchCover(book, btn) {
   btn.disabled = true;
   btn.textContent = "A procurar…";
   try {
-    let cover = null;
-    if (book.isbn) {
-      // O endereço por ISBN devolve uma imagem vazia de 1px quando não
-      // existe; o parâmetro default=false faz devolver erro 404, que é
-      // o que precisamos para saber se há mesmo capa
-      const url = `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(book.isbn)}-M.jpg?default=false`;
-      const res = await fetch(url, { method: "HEAD" });
-      if (res.ok) cover = url;
-    }
-    if (!cover) {
-      const q = encodeURIComponent(`${book.title} ${book.author}`);
-      const res = await fetch(
-        `https://openlibrary.org/search.json?limit=1&fields=cover_i,title&q=${q}`
-      );
-      if (res.ok) {
-        const json = await res.json();
-        const doc = (json.docs || [])[0];
-        if (doc && doc.cover_i) {
-          cover = `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`;
-        }
-      }
-    }
-    if (!cover) {
+    const found = await Covers.findUrl(book);
+    if (!found) {
       btn.disabled = false;
       btn.textContent = "Procurar capa";
-      notify("Não encontrei capa para este livro");
+      notify("Não encontrei capa em nenhuma fonte");
       return;
     }
-    await DB.putBook({ ...book, cover, updatedAt: new Date().toISOString() });
+    await DB.putBook({ ...book, cover: found.url, updatedAt: new Date().toISOString() });
+    try {
+      btn.textContent = "A guardar…";
+      await Covers.download(book, found.url);
+      forgetCover(book.id);
+    } catch (e) {
+      // Guardar falhou, mas o endereço serve enquanto houver rede
+    }
     await refresh();
-    notify("Capa encontrada");
+    notify(`Capa encontrada (${found.source})`);
   } catch (e) {
     btn.disabled = false;
     btn.textContent = "Procurar capa";
-    notify("Sem ligação à Open Library");
+    notify("Sem ligação para procurar capas");
   }
 }
 
@@ -1142,6 +1177,10 @@ function renderSettings() {
       <div class="rt-panel">
         <p class="rt-hint" id="coverState"></p>
         <button class="rt-btn rt-btn-full" id="findCovers">Procurar capas em falta</button>
+        <button class="rt-btn rt-btn-full" id="saveCovers">Guardar capas no telemóvel</button>
+        <p class="rt-hint">Guardar as capas no telemóvel faz com que apareçam
+        offline e deixem de depender de sites externos. Alguns servidores
+        recusam — nesses casos fica o link.</p>
       </div>
 
       <h2 class="rt-section-title">Testes</h2>
@@ -1210,14 +1249,22 @@ function renderSettings() {
     };
     reader.readAsText(file);
   };
-  // Capas em falta
-  const missing = books.filter((b) => !b.cover);
+  // Capas: procurar as que faltam e guardar no dispositivo as que só
+  // existem como endereço externo
+  const missing = books.filter((b) => !b.cover && !localCovers.has(b.id));
+  const remoteOnly = books.filter((b) => b.cover && !localCovers.has(b.id));
   const coverState = $("#coverState");
   const coverBtn = $("#findCovers");
-  coverState.textContent = missing.length
-    ? `${missing.length} ${missing.length === 1 ? "livro sem capa" : "livros sem capa"}. Precisa de ligação à internet.`
-    : "Todos os livros têm capa.";
+  const saveBtn = $("#saveCovers");
+
+  const parts = [];
+  if (localCovers.size) parts.push(`${localCovers.size} guardadas no telemóvel`);
+  if (remoteOnly.length) parts.push(`${remoteOnly.length} só como link`);
+  if (missing.length) parts.push(`${missing.length} sem capa`);
+  coverState.textContent = parts.length ? parts.join(" · ") + "." : "Sem livros ainda.";
+
   coverBtn.disabled = missing.length === 0;
+  coverBtn.textContent = `Procurar ${missing.length} capas em falta`;
   coverBtn.onclick = async () => {
     coverBtn.disabled = true;
     let found = 0;
@@ -1225,30 +1272,49 @@ function renderSettings() {
       const b = missing[i];
       coverBtn.textContent = `A procurar… ${i + 1}/${missing.length}`;
       try {
-        const q = encodeURIComponent(`${b.title} ${b.author}`);
-        const res = await fetch(
-          `https://openlibrary.org/search.json?limit=1&fields=cover_i&q=${q}`
-        );
-        if (res.ok) {
-          const doc = ((await res.json()).docs || [])[0];
-          if (doc && doc.cover_i) {
-            await DB.putBook({
-              ...b,
-              cover: `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`,
-              updatedAt: new Date().toISOString(),
-            });
-            found++;
-          }
+        const hit = await Covers.findUrl(b);
+        if (hit) {
+          await DB.putBook({ ...b, cover: hit.url, updatedAt: new Date().toISOString() });
+          try {
+            await Covers.download(b, hit.url);
+            forgetCover(b.id);
+          } catch (e) { /* fica o endereço */ }
+          found++;
         }
       } catch (e) {
-        break; // sem rede: não vale a pena continuar
+        break;  // sem rede: não vale a pena insistir
       }
-      // Uma pausa curta entre pedidos, para não sobrecarregar um serviço
-      // gratuito que nos está a dar isto de graça
-      await new Promise((r) => setTimeout(r, 350));
+      // Pausa entre livros: estes serviços são gratuitos e não é boa
+      // educação martelá-los com dezenas de pedidos seguidos
+      await new Promise((r) => setTimeout(r, 400));
     }
     await refresh();
     notify(found ? `${found} ${found === 1 ? "capa encontrada" : "capas encontradas"}` : "Nenhuma capa encontrada");
+  };
+
+  saveBtn.disabled = remoteOnly.length === 0;
+  saveBtn.textContent = `Guardar ${remoteOnly.length} capas no telemóvel`;
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true;
+    let saved = 0, failed = 0;
+    for (let i = 0; i < remoteOnly.length; i++) {
+      const b = remoteOnly[i];
+      saveBtn.textContent = `A guardar… ${i + 1}/${remoteOnly.length}`;
+      try {
+        await Covers.download(b, b.cover);
+        forgetCover(b.id);
+        saved++;
+      } catch (e) {
+        failed++;
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    await refresh();
+    notify(
+      failed
+        ? `${saved} guardadas, ${failed} recusadas pelo servidor`
+        : `${saved} capas guardadas no telemóvel`
+    );
   };
 
   $("#demo").onclick = async () => {
@@ -1259,9 +1325,12 @@ function renderSettings() {
     await refresh();
   };
   $("#wipe").onclick = async () => {
-    if (!confirm("Apagar todos os livros, notas e fotos?")) return;
+    if (!confirm("Apagar todos os livros, notas, fotos e capas?")) return;
     photoUrls.forEach((url) => URL.revokeObjectURL(url));
     photoUrls.clear();
+    coverUrls.forEach((url) => URL.revokeObjectURL(url));
+    coverUrls.clear();
+    localCovers.clear();
     await DB.clearAll();
     notify("Tudo apagado");
     await refresh();
