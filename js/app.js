@@ -12,6 +12,11 @@
 
 /* ---------------- Estado ---------------- */
 
+// Sobe sempre que os ficheiros mudam. Aparece no ecrã Dados, para se
+// saber num relance se o telemóvel já está a servir a versão nova ou
+// ainda tem a antiga em cache.
+const APP_VERSION = "v12";
+
 const state = {
   view: "library",     // library | notes | add | settings
   filter: "reading",   // filtro da estante
@@ -1167,6 +1172,7 @@ function renderSettings() {
       <header class="rt-header">
         <h1 class="rt-title">Os meus dados</h1>
         <p class="rt-subtitle">${books.length} livros · ${notes.length} notas · ${withPhotos} com foto</p>
+        <p class="rt-subtitle">Versão da app: <strong>${APP_VERSION}</strong></p>
       </header>
 
       <div class="rt-panel">
@@ -1211,6 +1217,10 @@ function renderSettings() {
 
       <h2 class="rt-section-title">Testes</h2>
       <div class="rt-panel">
+        <p class="rt-hint">Se acabaste de publicar ficheiros novos e a app
+        continua igual, força a atualização: limpa os ficheiros guardados e
+        recarrega. Os teus livros e notas não são tocados.</p>
+        <button class="rt-btn rt-btn-full" id="forceUpdate">Forçar atualização da app</button>
         <p class="rt-hint">Enche a estante com oito livros e três notas, para experimentares
         os ecrãs sem escrever tudo à mão.</p>
         <button class="rt-btn rt-btn-full" id="demo">Carregar exemplos</button>
@@ -1341,6 +1351,25 @@ function renderSettings() {
         ? `${saved} guardadas, ${failed} recusadas pelo servidor`
         : `${saved} capas guardadas no telemóvel`
     );
+  };
+
+  // Força a atualização: apaga só os ficheiros da app em cache, nunca
+  // o IndexedDB onde vivem os livros, as notas e as fotos
+  $("#forceUpdate").onclick = async () => {
+    if (!confirm("Recarregar a app com os ficheiros mais recentes?")) return;
+    try {
+      if (window.caches) {
+        const names = await caches.keys();
+        await Promise.all(names.map((n) => caches.delete(n)));
+      }
+      if (navigator.serviceWorker) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.unregister()));
+      }
+    } catch (e) {
+      console.warn("Falha ao limpar a cache", e);
+    }
+    location.reload(true);
   };
 
   $("#demo").onclick = async () => {
