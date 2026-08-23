@@ -171,11 +171,14 @@ const Covers = (function () {
    * Procura várias capas candidatas, para o utilizador escolher.
    * Sem ISBN, procurar por título devolve frequentemente a capa de um
    * livro homónimo — por isso é melhor mostrar opções do que adivinhar.
+   * @param {object} book o livro
+   * @param {string} override pesquisa alternativa escrita pelo utilizador
    * @returns {Promise<Array<{url, source, label}>>}
    */
-  async function findCandidates(book, limit = 6) {
+  async function findCandidates(book, override, limit = 12) {
     const out = [];
     const seen = new Set();
+    const query = (override || "").trim();
 
     const add = (url, source, label) => {
       if (!url || seen.has(url) || out.length >= limit) return;
@@ -183,8 +186,8 @@ const Covers = (function () {
       out.push({ url, source, label: label || "" });
     };
 
-    // Pelo ISBN, quando existe: é a única via exata
-    if (book.isbn) {
+    // 1. Pelo ISBN, quando existe: a única via exata
+    if (book.isbn && !query) {
       try {
         const url = `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(book.isbn)}-L.jpg?default=false`;
         const res = await fetch(url, { method: "HEAD" });
@@ -192,17 +195,51 @@ const Covers = (function () {
       } catch (e) { /* segue */ }
     }
 
-    // Por título e autor: vários resultados, com o ano para ajudar a
-    // distinguir edições
+    const terms = query || `${book.title} ${firstAuthor(book.author)}`;
+
+    // 2. Google Books: catálogo muito maior, sobretudo em edições
+    // portuguesas e brasileiras. O endereço vem com zoom=1, que é uma
+    // miniatura de 128px; trocar para zoom=3 dá uma imagem utilizável.
     try {
-      const q = encodeURIComponent(`${book.title} ${firstAuthor(book.author)}`);
       const res = await fetch(
-        `https://openlibrary.org/search.json?limit=10&fields=cover_i,title,author_name,first_publish_year,language&q=${q}`
+        "https://www.googleapis.com/books/v1/volumes?maxResults=10&q=" +
+          encodeURIComponent(query || `intitle:${book.title}`)
+      );
+      if (res.ok) {
+        const items = ((await res.json()).items || []);
+        // Edições em português primeiro
+        items.sort((a, b) => {
+          const la = (a.volumeInfo && a.volumeInfo.language) === "pt" ? 0 : 1;
+          const lb = (b.volumeInfo && b.volumeInfo.language) === "pt" ? 0 : 1;
+          return la - lb;
+        });
+        for (const item of items) {
+          const info = item.volumeInfo || {};
+          const links = info.imageLinks;
+          if (!links) continue;
+          const big = (links.thumbnail || links.smallThumbnail || "")
+            .replace("http://", "https://")
+            .replace(/zoom=\d/, "zoom=3")
+            .replace("&edge=curl", "");
+          const label = [
+            (info.authors && info.authors[0]) || "",
+            (info.publishedDate || "").slice(0, 4),
+            info.language === "pt" ? "PT" : "",
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          add(big, "Google Books", label);
+        }
+      }
+    } catch (e) { /* segue */ }
+
+    // 3. Open Library: imagens grandes, cobertura mais fraca em português
+    try {
+      const res = await fetch(
+        `https://openlibrary.org/search.json?limit=10&fields=cover_i,title,author_name,first_publish_year,language&q=${encodeURIComponent(terms)}`
       );
       if (res.ok) {
         const docs = ((await res.json()).docs || []).filter((d) => d.cover_i);
-        // Edições em português primeiro: são as mais prováveis de serem
-        // o livro que está mesmo na prateleira
         docs.sort((a, b) => {
           const pa = (a.language || []).includes("por") ? 0 : 1;
           const pb = (b.language || []).includes("por") ? 0 : 1;

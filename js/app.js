@@ -15,7 +15,7 @@
 // Sobe sempre que os ficheiros mudam. Aparece no ecrã Dados, para se
 // saber num relance se o telemóvel já está a servir a versão nova ou
 // ainda tem a antiga em cache.
-const APP_VERSION = "v15";
+const APP_VERSION = "v16";
 
 const state = {
   view: "library",     // library | notes | add | settings
@@ -857,7 +857,7 @@ function renderBook(book) {
   };
   const findCover = $("#findCover");
   if (findCover) findCover.onclick = () => {
-    coverPicker = { candidates: [], state: "idle" };
+    coverPicker = { candidates: [], state: "idle", query: "" };
     state.coverBookId = book.id;
     render();
   };
@@ -928,7 +928,7 @@ async function searchCover(book, btn) {
 
 /* ---------------- Ecrã: Trocar capa ---------------- */
 
-let coverPicker = { candidates: [], state: "idle" };
+let coverPicker = { candidates: [], state: "idle", query: "" };
 
 function renderCoverPicker(book) {
   const has = book.cover || localCovers.has(book.id);
@@ -944,7 +944,7 @@ function renderCoverPicker(book) {
       .map(
         (c, i) => `<button class="rt-cover-option" data-pick="${i}">
           <img src="${esc(c.url)}" alt="" loading="lazy">
-          <span>${esc(c.label || c.source)}</span>
+          <span>${esc(c.label || "")}<br><em>${esc(c.source)}</em></span>
         </button>`
       )
       .join("")}</div>`;
@@ -970,7 +970,14 @@ function renderCoverPicker(book) {
       </div>
 
       <h2 class="rt-section-title">Procurar online</h2>
-      <button class="rt-btn rt-btn-full" id="searchCovers">Procurar capas para este livro</button>
+      <p class="rt-hint">Procura por ${esc(book.title)} e ${esc(String(book.author).split(",")[0])}.
+      Se as capas não corresponderem, escreve outros termos — por exemplo o nome
+      da editora ou o título noutra língua.</p>
+      <div class="rt-searchbar">
+        <input class="rt-input" id="coverQuery" placeholder="Outra pesquisa (opcional)"
+          value="${esc(coverPicker.query || "")}">
+        <button class="rt-btn rt-btn-primary" id="searchCovers">Procurar</button>
+      </div>
       ${listHtml}
 
       <input type="file" id="camInput" accept="image/*" capture="environment" hidden>
@@ -978,16 +985,17 @@ function renderCoverPicker(book) {
     </main>`;
 
   $("#back").onclick = () => {
-    coverPicker = { candidates: [], state: "idle" };
+    coverPicker = { candidates: [], state: "idle", query: "" };
     state.coverBookId = null;
     render();
   };
 
   $("#searchCovers").onclick = async () => {
+    coverPicker.query = $("#coverQuery").value;
     coverPicker.state = "searching";
     renderCoverPicker(book);
     try {
-      coverPicker.candidates = await Covers.findCandidates(book);
+      coverPicker.candidates = await Covers.findCandidates(book, coverPicker.query);
       coverPicker.state = "done";
     } catch (e) {
       coverPicker.state = "done";
@@ -1006,7 +1014,7 @@ function renderCoverPicker(book) {
         await Covers.download(book, c.url);
       } catch (e) { /* fica o endereço */ }
       forgetCover(book.id);
-      coverPicker = { candidates: [], state: "idle" };
+      coverPicker = { candidates: [], state: "idle", query: "" };
       state.coverBookId = null;
       await refresh();
       notify("Capa trocada");
@@ -1022,7 +1030,7 @@ function renderCoverPicker(book) {
       // Sem endereço externo: a capa passa a ser só a imagem guardada
       await DB.putBook({ ...book, cover: null, updatedAt: new Date().toISOString() });
       forgetCover(book.id);
-      coverPicker = { candidates: [], state: "idle" };
+      coverPicker = { candidates: [], state: "idle", query: "" };
       state.coverBookId = null;
       await refresh();
       notify("Capa guardada");
