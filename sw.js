@@ -19,7 +19,7 @@
    novos, mas já não é isso que decide se a atualização chega.
    ================================================================== */
 
-const CACHE_NAME = "caderno-leitura-v13";
+const CACHE_NAME = "caderno-leitura-v14";
 
 const APP_FILES = [
   "./",
@@ -27,6 +27,7 @@ const APP_FILES = [
   "css/style.css",
   "js/db.js",
   "js/covers.js",
+  "js/drive.js",
   "js/app.js",
   "manifest.json",
   "icons/icon-192.png",
@@ -59,7 +60,12 @@ self.addEventListener("fetch", (event) => {
   const sameOrigin = url.origin === self.location.origin;
 
   // A pesquisa de livros precisa sempre de dados frescos
-  if (url.hostname === "openlibrary.org" || url.hostname === "www.googleapis.com") return;
+  if (
+    url.hostname === "openlibrary.org" ||
+    url.hostname.endsWith("googleapis.com") ||
+    url.hostname.endsWith("google.com") ||
+    url.hostname.endsWith("gstatic.com")
+  ) return;
 
   if (sameOrigin) {
     // REDE PRIMEIRO: uma versão nova chega assim que existe

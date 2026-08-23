@@ -15,7 +15,7 @@
 // Sobe sempre que os ficheiros mudam. Aparece no ecrã Dados, para se
 // saber num relance se o telemóvel já está a servir a versão nova ou
 // ainda tem a antiga em cache.
-const APP_VERSION = "v13";
+const APP_VERSION = "v14";
 
 const state = {
   view: "library",     // library | notes | add | settings
@@ -1093,13 +1093,38 @@ async function shareBackup(withPhotos) {
   );
 }
 
+/**
+ * Se o Drive estiver ligado e já tiverem passado os dias escolhidos,
+ * envia a cópia sozinho, sem perguntar nada. É o mais próximo de
+ * automático que uma PWA consegue: continua a depender de abrires a app.
+ */
+async function autoBackupToDrive() {
+  if (typeof Drive === "undefined" || !Drive.isLinked() || !prefs.backupDays) return false;
+  if (books.length === 0 && notes.length === 0) return false;
+  if (!navigator.onLine) return false;
+
+  const days = daysSince(Drive.lastUpload() || prefs.lastBackupAt || prefs.firstRunAt);
+  if (days === null || days < prefs.backupDays) return false;
+
+  try {
+    const data = await DB.exportData(false);
+    await Drive.upload(data, false);  // false = não perguntar nada
+    markBackupDone();
+    notify("Cópia enviada para o Drive");
+    return true;
+  } catch (e) {
+    // Autorização caducada ou Drive indisponível: o aviso normal trata
+    return false;
+  }
+}
+
 /* ---------------- Aviso de cópia de segurança ---------------- */
 
 /**
  * Mostra o aviso se já passaram os dias escolhidos desde a última
  * exportação. Corre uma vez por abertura da app.
  */
-function maybeShowBackupReminder() {
+async function maybeShowBackupReminder() {
   if (!prefs.backupDays) return;                 // avisos desligados
   if (books.length === 0 && notes.length === 0) return;  // nada a perder ainda
 
@@ -1108,6 +1133,11 @@ function maybeShowBackupReminder() {
     prefs.firstRunAt = new Date().toISOString();
     savePrefs();
   }
+
+  // Com o Drive ligado, tenta enviar sozinho. Se conseguir, não há
+  // nada a avisar.
+  if (await autoBackupToDrive()) return;
+
   if (prefs.snoozeUntil && Date.now() < new Date(prefs.snoozeUntil).getTime()) return;
 
   const days = daysSince(prefs.lastBackupAt || prefs.firstRunAt);
@@ -1140,6 +1170,19 @@ function showBackupDialog(days, never) {
   wrap.querySelector("#mExport").onclick = async () => {
     const btn = wrap.querySelector("#mExport");
     btn.disabled = true;
+    btn.textContent = "A guardar…";
+    // Com o Drive ligado é a via preferida; se falhar, cai nas outras
+    if (typeof Drive !== "undefined" && Drive.isLinked()) {
+      try {
+        await Drive.upload(await DB.exportData(false), true);
+        markBackupDone();
+        close();
+        notify("Cópia enviada para o Drive");
+        return;
+      } catch (e) {
+        /* segue para a partilha ou descarga */
+      }
+    }
     if (canShareFiles()) {
       await shareBackup(false);
     } else {
@@ -1184,6 +1227,14 @@ function renderSettings() {
         <button class="rt-btn rt-btn-full" id="imp">Importar JSON</button>
         <input type="file" id="impInput" accept="application/json" hidden>
         <p class="rt-hint" id="usage"></p>
+      </div>
+
+      <h2 class="rt-section-title">Google Drive</h2>
+      <div class="rt-panel">
+        <p class="rt-hint" id="driveState"></p>
+        <button class="rt-btn rt-btn-full" id="driveConnect" hidden>Ligar ao Drive</button>
+        <button class="rt-btn rt-btn-primary rt-btn-full" id="driveUpload" hidden>Enviar cópia agora</button>
+        <button class="rt-link" id="driveUnlink" hidden>Desligar do Drive</button>
       </div>
 
       <h2 class="rt-section-title">Cópias de segurança</h2>
@@ -1238,6 +1289,67 @@ function renderSettings() {
     notify("A juntar as fotos…");
     downloadJson(await DB.exportData(true), `leituras-completo-${today()}.json`);
     markBackupDone();
+    renderSettings();
+  };
+
+  // Google Drive
+  const dState = $("#driveState");
+  const dConnect = $("#driveConnect");
+  const dUpload = $("#driveUpload");
+  const dUnlink = $("#driveUnlink");
+
+  if (typeof Drive === "undefined") {
+    dState.textContent = "O módulo do Drive não carregou.";
+  } else if (Drive.isLinked()) {
+    const last = Drive.lastUpload();
+    const d = daysSince(last);
+    dState.innerHTML = last
+      ? `Ligado. Última cópia: ${formatDateTime(last)} (há ${d} ${d === 1 ? "dia" : "dias"}).<br>
+         Fica na pasta <strong>${esc(Drive.FOLDER_NAME)}</strong> do teu Drive, e é enviada
+         sozinha sempre que abrires a app depois de ${prefs.backupDays} dias.`
+      : `Ligado, mas ainda não enviaste nenhuma cópia.`;
+    dUpload.hidden = false;
+    dUnlink.hidden = false;
+  } else {
+    dState.textContent =
+      "Por ligar. Depois de autorizares, a cópia sobe sozinha quando abrires a app.";
+    dConnect.hidden = false;
+  }
+
+  if (dConnect) dConnect.onclick = async () => {
+    dConnect.disabled = true;
+    dConnect.textContent = "A abrir a Google…";
+    try {
+      await Drive.connect();
+      notify("Drive ligado");
+      renderSettings();
+    } catch (e) {
+      dConnect.disabled = false;
+      dConnect.textContent = "Ligar ao Drive";
+      notify("Não foi possível ligar: " + e.message);
+    }
+  };
+
+  if (dUpload) dUpload.onclick = async () => {
+    dUpload.disabled = true;
+    dUpload.textContent = "A enviar…";
+    try {
+      const data = await DB.exportData(false);
+      const r = await Drive.upload(data, true);
+      markBackupDone();
+      notify(`Enviado (${Math.round(r.size / 1024)} KB)`);
+      renderSettings();
+    } catch (e) {
+      dUpload.disabled = false;
+      dUpload.textContent = "Enviar cópia agora";
+      notify("Falhou: " + e.message);
+    }
+  };
+
+  if (dUnlink) dUnlink.onclick = () => {
+    if (!confirm("Desligar do Drive? Os ficheiros já enviados ficam lá.")) return;
+    Drive.unlink();
+    notify("Drive desligado");
     renderSettings();
   };
 
