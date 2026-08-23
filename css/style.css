@@ -299,3 +299,22 @@ body {
   font-size: 13px; z-index: 50; max-width: 90%; text-align: center;
 }
 .rt-toast[hidden] { display: none; }
+
+/* Grelha de capas candidatas, no ecrã de trocar capa */
+.rt-cover-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px;
+}
+.rt-cover-option {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px; cursor: pointer; font: inherit;
+}
+.rt-cover-option:hover { border-color: var(--accent); }
+.rt-cover-option img {
+  width: 100%; aspect-ratio: 2 / 3; object-fit: contain; background: var(--paper);
+  border-radius: 3px;
+}
+.rt-cover-option span {
+  font-size: 10.5px; color: var(--muted); text-align: center; line-height: 1.3;
+}
+.rt-cover-option-busy { opacity: 0.5; pointer-events: none; }
