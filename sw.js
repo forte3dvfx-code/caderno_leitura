@@ -19,7 +19,7 @@
    novos, mas já não é isso que decide se a atualização chega.
    ================================================================== */
 
-const CACHE_NAME = "caderno-leitura-v14";
+const CACHE_NAME = "caderno-leitura-v15";
 
 const APP_FILES = [
   "./",
