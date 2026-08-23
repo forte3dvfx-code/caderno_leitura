@@ -167,5 +167,75 @@ const Covers = (function () {
     return small.size;
   }
 
-  return { findUrl, download, shrink, SOURCES };
+  /**
+   * Procura várias capas candidatas, para o utilizador escolher.
+   * Sem ISBN, procurar por título devolve frequentemente a capa de um
+   * livro homónimo — por isso é melhor mostrar opções do que adivinhar.
+   * @returns {Promise<Array<{url, source, label}>>}
+   */
+  async function findCandidates(book, limit = 6) {
+    const out = [];
+    const seen = new Set();
+
+    const add = (url, source, label) => {
+      if (!url || seen.has(url) || out.length >= limit) return;
+      seen.add(url);
+      out.push({ url, source, label: label || "" });
+    };
+
+    // Pelo ISBN, quando existe: é a única via exata
+    if (book.isbn) {
+      try {
+        const url = `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(book.isbn)}-L.jpg?default=false`;
+        const res = await fetch(url, { method: "HEAD" });
+        if (res.ok) add(url, "ISBN", "Edição exata");
+      } catch (e) { /* segue */ }
+    }
+
+    // Por título e autor: vários resultados, com o ano para ajudar a
+    // distinguir edições
+    try {
+      const q = encodeURIComponent(`${book.title} ${firstAuthor(book.author)}`);
+      const res = await fetch(
+        `https://openlibrary.org/search.json?limit=10&fields=cover_i,title,author_name,first_publish_year,language&q=${q}`
+      );
+      if (res.ok) {
+        const docs = ((await res.json()).docs || []).filter((d) => d.cover_i);
+        // Edições em português primeiro: são as mais prováveis de serem
+        // o livro que está mesmo na prateleira
+        docs.sort((a, b) => {
+          const pa = (a.language || []).includes("por") ? 0 : 1;
+          const pb = (b.language || []).includes("por") ? 0 : 1;
+          return pa - pb;
+        });
+        for (const d of docs) {
+          const label = [
+            (d.author_name && d.author_name[0]) || "",
+            d.first_publish_year || "",
+            (d.language || []).includes("por") ? "PT" : "",
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          add(`https://covers.openlibrary.org/b/id/${d.cover_i}-L.jpg`, "Open Library", label);
+        }
+      }
+    } catch (e) { /* segue */ }
+
+    return out;
+  }
+
+  /**
+   * Guarda uma imagem escolhida pelo utilizador (foto da capa ou
+   * ficheiro da galeria) como capa do livro. É a única via que garante
+   * a edição certa, e a única que funciona para livros que nenhuma base
+   * de dados conhece.
+   */
+  async function saveOwn(book, file) {
+    if (!file.type.startsWith("image/")) throw new Error("Isso não é uma imagem");
+    const small = await shrink(file, 700, 0.85);
+    await DB.putCover(book.id, small);
+    return small.size;
+  }
+
+  return { findUrl, findCandidates, download, saveOwn, shrink, SOURCES };
 })();

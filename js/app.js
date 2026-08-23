@@ -15,7 +15,7 @@
 // Sobe sempre que os ficheiros mudam. Aparece no ecrã Dados, para se
 // saber num relance se o telemóvel já está a servir a versão nova ou
 // ainda tem a antiga em cache.
-const APP_VERSION = "v14";
+const APP_VERSION = "v15";
 
 const state = {
   view: "library",     // library | notes | add | settings
@@ -29,6 +29,7 @@ const state = {
   allNoteOrder: "desc",  // no caderno geral: as mais recentes primeiro
   openBookId: null,    // livro aberto
   editorBookId: null,  // a escrever nota para este livro
+  coverBookId: null,   // a trocar a capa deste livro
   searchResults: [],
   searchState: "idle",
   manualOpen: false,
@@ -326,8 +327,13 @@ function render() {
   document.querySelectorAll("#tabs .rt-tab").forEach((b) => {
     b.classList.toggle("rt-tab-on", b.dataset.view === state.view);
   });
-  $("#tabs").hidden = !!(state.openBookId || state.editorBookId);
+  $("#tabs").hidden = !!(state.openBookId || state.editorBookId || state.coverBookId);
 
+  if (state.coverBookId) {
+    const book = books.find((b) => b.id === state.coverBookId);
+    if (book) { renderCoverPicker(book); return; }
+    state.coverBookId = null;
+  }
   if (state.editorBookId) {
     const book = books.find((b) => b.id === state.editorBookId);
     renderEditor(book);
@@ -812,7 +818,7 @@ function renderBook(book) {
       <div class="rt-detail-head">
         <div class="rt-cover-slot">
           ${coverHtml(book, "lg")}
-          ${book.cover ? "" : `<button class="rt-cover-find" id="findCover">Procurar capa</button>`}
+          <button class="rt-cover-find" id="findCover">${book.cover || localCovers.has(book.id) ? "Trocar capa" : "Adicionar capa"}</button>
         </div>
         <div>
           <h1 class="rt-detail-title">${esc(book.title)}</h1>
@@ -850,7 +856,11 @@ function renderBook(book) {
     await refresh();
   };
   const findCover = $("#findCover");
-  if (findCover) findCover.onclick = () => searchCover(book, findCover);
+  if (findCover) findCover.onclick = () => {
+    coverPicker = { candidates: [], state: "idle" };
+    state.coverBookId = book.id;
+    render();
+  };
 
   // Estrelas: tocar numa põe essa avaliação; tocar na atual limpa-a
   app().querySelectorAll("[data-star]").forEach((el) => {
@@ -914,6 +924,129 @@ async function searchCover(book, btn) {
     btn.textContent = "Procurar capa";
     notify("Sem ligação para procurar capas");
   }
+}
+
+/* ---------------- Ecrã: Trocar capa ---------------- */
+
+let coverPicker = { candidates: [], state: "idle" };
+
+function renderCoverPicker(book) {
+  const has = book.cover || localCovers.has(book.id);
+
+  let listHtml = "";
+  if (coverPicker.state === "searching") {
+    listHtml = `<p class="rt-hint">A procurar capas…</p>`;
+  } else if (coverPicker.state === "done" && coverPicker.candidates.length === 0) {
+    listHtml = `<p class="rt-hint">Não encontrei nenhuma capa para este livro.
+      Tira uma foto à capa — é a via que nunca falha.</p>`;
+  } else if (coverPicker.candidates.length) {
+    listHtml = `<div class="rt-cover-grid">${coverPicker.candidates
+      .map(
+        (c, i) => `<button class="rt-cover-option" data-pick="${i}">
+          <img src="${esc(c.url)}" alt="" loading="lazy">
+          <span>${esc(c.label || c.source)}</span>
+        </button>`
+      )
+      .join("")}</div>`;
+  }
+
+  app().innerHTML = `
+    <main class="rt-main rt-detail">
+      <button class="rt-back" id="back">&larr; ${esc(book.title)}</button>
+      <h1 class="rt-detail-title rt-mb">Capa</h1>
+
+      <div class="rt-detail-head">
+        ${coverHtml(book, "lg")}
+        <div>
+          <p class="rt-hint">${has ? "Capa atual." : "Este livro ainda não tem capa."}</p>
+          ${has ? `<button class="rt-link" id="removeCover">Remover capa</button>` : ""}
+        </div>
+      </div>
+
+      <h2 class="rt-section-title">A minha capa</h2>
+      <div class="rt-pickers">
+        <button class="rt-dropzone" id="useCam"><span>Fotografar a capa</span><small>A edição certa, garantida</small></button>
+        <button class="rt-dropzone" id="useGal"><span>Escolher imagem</span><small>Da galeria</small></button>
+      </div>
+
+      <h2 class="rt-section-title">Procurar online</h2>
+      <button class="rt-btn rt-btn-full" id="searchCovers">Procurar capas para este livro</button>
+      ${listHtml}
+
+      <input type="file" id="camInput" accept="image/*" capture="environment" hidden>
+      <input type="file" id="galInput" accept="image/*" hidden>
+    </main>`;
+
+  $("#back").onclick = () => {
+    coverPicker = { candidates: [], state: "idle" };
+    state.coverBookId = null;
+    render();
+  };
+
+  $("#searchCovers").onclick = async () => {
+    coverPicker.state = "searching";
+    renderCoverPicker(book);
+    try {
+      coverPicker.candidates = await Covers.findCandidates(book);
+      coverPicker.state = "done";
+    } catch (e) {
+      coverPicker.state = "done";
+      coverPicker.candidates = [];
+      notify("Sem ligação para procurar");
+    }
+    renderCoverPicker(book);
+  };
+
+  app().querySelectorAll("[data-pick]").forEach((el) => {
+    el.onclick = async () => {
+      const c = coverPicker.candidates[+el.dataset.pick];
+      el.classList.add("rt-cover-option-busy");
+      await DB.putBook({ ...book, cover: c.url, updatedAt: new Date().toISOString() });
+      try {
+        await Covers.download(book, c.url);
+      } catch (e) { /* fica o endereço */ }
+      forgetCover(book.id);
+      coverPicker = { candidates: [], state: "idle" };
+      state.coverBookId = null;
+      await refresh();
+      notify("Capa trocada");
+    };
+  });
+
+  const pickOwn = async (input) => {
+    const file = input.files && input.files[0];
+    input.value = "";
+    if (!file) return;
+    try {
+      await Covers.saveOwn(book, file);
+      // Sem endereço externo: a capa passa a ser só a imagem guardada
+      await DB.putBook({ ...book, cover: null, updatedAt: new Date().toISOString() });
+      forgetCover(book.id);
+      coverPicker = { candidates: [], state: "idle" };
+      state.coverBookId = null;
+      await refresh();
+      notify("Capa guardada");
+    } catch (e) {
+      notify(e.message);
+    }
+  };
+  $("#useCam").onclick = () => $("#camInput").click();
+  $("#useGal").onclick = () => $("#galInput").click();
+  $("#camInput").onchange = (e) => pickOwn(e.target);
+  $("#galInput").onchange = (e) => pickOwn(e.target);
+
+  const rm = $("#removeCover");
+  if (rm) rm.onclick = async () => {
+    await DB.deleteCover(book.id);
+    await DB.putBook({ ...book, cover: null, updatedAt: new Date().toISOString() });
+    forgetCover(book.id);
+    await refresh();
+    renderCoverPicker(books.find((b) => b.id === book.id));
+    notify("Capa removida");
+  };
+
+  fillCovers();
+  bindCoverFallbacks();
 }
 
 /* ---------------- Ecrã: Nova nota ---------------- */
